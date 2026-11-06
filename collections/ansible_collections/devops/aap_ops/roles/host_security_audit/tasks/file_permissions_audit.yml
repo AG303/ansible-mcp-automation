@@ -1,0 +1,70 @@
+---
+- name: File permission audit
+  block:
+    - name: Linux - world-writable, unowned and SUID/SGID files
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        paths="{{ (scan_paths | default('/etc,/usr/bin,/usr/sbin,/var')).split(',') | map('trim') | select | map('quote') | join(' ') }}"
+        echo '---ww'; find $paths -xdev -type f -perm -0002 2>/dev/null | head -{{ host_security_audit_max_findings }}
+        echo '---wwdir'; find $paths -xdev -type d -perm -0002 ! -perm -1000 2>/dev/null | head -{{ host_security_audit_max_findings }}
+        echo '---unowned'; find $paths -xdev \( -nouser -o -nogroup \) 2>/dev/null | head -{{ host_security_audit_max_findings }}
+        echo '---suid'; find $paths -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | head -500
+        true
+      args:
+        executable: /bin/bash
+      register: _fp_linux
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - permissive ACLs on key paths
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $risky = 'Everyone|BUILTIN\\Users|NT AUTHORITY\\Authenticated Users'
+        $rights = 'FullControl|Modify|Write'
+        $out = @()
+        foreach ($p in @('{{ host_security_audit_windows_paths | join("','") }}')) {
+          Get-ChildItem -LiteralPath $p -Directory -ErrorAction SilentlyContinue | Select-Object -First 300 | ForEach-Object {
+            $acl = Get-Acl -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+            foreach ($a in $acl.Access) {
+              if ($a.AccessControlType -eq 'Allow' -and "$($a.IdentityReference)" -match $risky -and "$($a.FileSystemRights)" -match $rights -and -not $a.IsInherited) {
+                $out += "$($_.FullName) : $($a.IdentityReference) $($a.FileSystemRights)" } } } }
+        ConvertTo-Json -InputObject @($out | Select-Object -First {{ host_security_audit_max_findings }}) -Compress
+      register: _fp_win
+      changed_when: false
+      check_mode: false
+
+    - name: Normalise
+      ansible.builtin.set_fact:
+        _fp: >-
+          {%- if aap_ops_is_windows -%}
+          {{ {'permissive_acls': (_fp_win.stdout | trim or '[]') | from_json} }}
+          {%- else -%}
+          {%-   set sec = {} -%}{%- set cur = namespace(k='') -%}
+          {%-   for l in _fp_linux.stdout_lines -%}
+          {%-     if l.startswith('---') -%}{%- set cur.k = l[3:] -%}{%- set _ = sec.update({cur.k: []}) -%}
+          {%-     elif cur.k -%}{%- set _ = sec[cur.k].append(l) -%}{%- endif -%}
+          {%-   endfor -%}
+          {{ {'world_writable_files': sec.ww | default([]),
+              'world_writable_dirs_no_sticky': sec.wwdir | default([]),
+              'unowned': sec.unowned | default([]),
+              'suid_sgid_unexpected': sec.suid | default([]) | reject('in', host_security_audit_suid_allowlist) | list,
+              'suid_sgid_total': sec.suid | default([]) | length} }}
+          {%- endif -%}
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'warn' if _n | int > 0 else 'ok' }}"
+          summary: >-
+            {%- if aap_ops_is_windows -%}{{ _fp.permissive_acls | length }} permissive explicit ACL entries on key paths
+            {%- else -%}{{ _fp.world_writable_files | length }} world-writable files, {{ _fp.world_writable_dirs_no_sticky | length }} world-writable dirs without sticky bit, {{ _fp.unowned | length }} unowned, {{ _fp.suid_sgid_unexpected | length }} unexpected SUID/SGID of {{ _fp.suid_sgid_total }}{%- endif -%}
+          details: "{{ _fp }}"
+      vars:
+        _n: >-
+          {{ (_fp.permissive_acls | length) if aap_ops_is_windows else
+             (_fp.world_writable_files | length + _fp.world_writable_dirs_no_sticky | length + _fp.unowned | length + _fp.suid_sgid_unexpected | length) }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: File permission audit}

@@ -1,0 +1,60 @@
+---
+- name: Post-patch validation
+  block:
+    - name: Remaining updates
+      ansible.builtin.include_tasks: _list_updates.yml
+      vars:
+        _sec_only: false
+
+    - name: Linux - failed systemd units
+      when: not aap_ops_is_windows
+      ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+      register: _po_failed
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - automatic services not running
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $x = Get-CimInstance Win32_Service -Filter "StartMode='Auto' AND State<>'Running'" |
+          Where-Object { $_.Name -notmatch '^(gupdate|edgeupdate|sppsvc|RemoteRegistry|MapsBroker|tiledatamodelsvc|CDPSvc|WbioSrvc|clr_optimization.*|sppsvc)$' } |
+          Select-Object -ExpandProperty Name
+        ConvertTo-Json -InputObject @($x) -Compress
+      register: _po_failed_win
+      changed_when: false
+      check_mode: false
+
+    - name: Critical services
+      ansible.builtin.include_tasks: _services.yml
+      vars:
+        _svc_list: "{{ (critical_services | default('')).split(',') | map('trim') | select | list }}"
+
+    - name: Reboot state
+      ansible.builtin.include_tasks: reboot_required.yml
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if (_svc_down | length > 0 or _failed_units | length > 0)
+               else ('warn' if (_rr.required or _updates | selectattr('security') | list | length > 0) else 'ok') }}
+          summary: >-
+            uptime {{ ((ansible_uptime_seconds | default(0) | int) / 3600) | round(1) }}h, {{ ansible_kernel | default('') }};
+            {{ _updates | length }} update(s) remaining; {{ _failed_units | length }} failed service(s){{ (': ' ~ _failed_units[:5] | join(',')) if _failed_units else '' }};
+            {{ 'reboot pending' if _rr.required else 'no reboot pending' }}{{ ('; critical down: ' ~ _svc_down | join(',')) if _svc_down else '' }}
+          details:
+            kernel: "{{ ansible_kernel | default('') }}"
+            uptime_hours: "{{ ((ansible_uptime_seconds | default(0) | int) / 3600) | round(1) }}"
+            remaining_updates: "{{ _updates | length }}"
+            remaining_security: "{{ _updates | selectattr('security') | list | length }}"
+            failed_services: "{{ _failed_units }}"
+            critical_services_down: "{{ _svc_down }}"
+            reboot_pending: "{{ _rr.required }}"
+      vars:
+        _failed_units: >-
+          {{ ((_po_failed_win.stdout | trim or '[]') | from_json) if aap_ops_is_windows
+             else (_po_failed.stdout_lines | map('split') | map('first') | list) }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Post-patch check}

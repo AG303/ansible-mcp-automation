@@ -1,0 +1,31 @@
+---
+# Runs on each target host: applies the selected standard remediation, then re-checks health.
+- name: Validate remediation
+  ansible.builtin.assert:
+    that:
+      - remediation_action | default('') in sn_incident_remediations
+      - remediation_action != 'restart_service' or (service_name | default('') | trim | length > 0)
+    fail_msg: "remediation_action must be one of {{ sn_incident_remediations.keys() | list }}; restart_service needs service_name."
+    quiet: true
+
+- name: "Remediate - {{ remediation_action }}"
+  ansible.builtin.include_role:
+    name: devops.aap_ops.host_monitor
+    tasks_from: "{{ sn_incident_remediations[remediation_action] }}"
+  vars:
+    older_than_days: "{{ 7 if remediation_action == 'clear_temp' else 14 }}"
+
+- name: Keep remediation result
+  ansible.builtin.set_fact:
+    _rem: "{{ aap_ops_host_result }}"
+
+- name: Re-check health
+  ansible.builtin.include_role: {name: devops.aap_ops.host_monitor, tasks_from: health_check}
+
+- name: Record result
+  ansible.builtin.set_fact:
+    aap_ops_host_result:
+      status: "{{ 'fail' if 'fail' in [_rem.status, aap_ops_host_result.status] else 'changed' }}"
+      summary: "remediation [{{ _rem.status }}] {{ _rem.summary }} | post-check [{{ aap_ops_host_result.status }}] {{ aap_ops_host_result.summary }}"
+      details: {remediation: "{{ _rem }}", post_check: "{{ aap_ops_host_result }}"}
+      healthy: "{{ aap_ops_host_result.status != 'fail' and _rem.status != 'fail' }}"

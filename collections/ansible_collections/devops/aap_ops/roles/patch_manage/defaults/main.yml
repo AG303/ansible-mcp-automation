@@ -1,0 +1,6 @@
+---
+patch_manage_win_categories_all: [SecurityUpdates, CriticalUpdates, UpdateRollups, Updates, DefinitionUpdates]
+patch_manage_win_categories_security: [SecurityUpdates, CriticalUpdates]
+patch_manage_reboot_timeout: 1800
+patch_manage_apt_cache_valid_time: 3600
+patch_manage_max_list: 200

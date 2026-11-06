@@ -1,0 +1,33 @@
+---
+- name: Create incident
+  block:
+    - name: Validate input
+      ansible.builtin.assert:
+        that: sn_short_description | default('') | trim | length > 0
+        fail_msg: sn_short_description is required.
+        quiet: true
+
+    - name: Create or update de-duplicated incident
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: incident_upsert}
+      vars:
+        sn_upsert_short_description: "{{ sn_short_description | trim }}"
+        sn_upsert_description: "{{ sn_description | default('') }}"
+        sn_upsert_impact: "{{ sn_impact | default('medium') }}"
+        sn_upsert_urgency: "{{ sn_urgency | default('medium') }}"
+        sn_upsert_assignment_group: "{{ sn_assignment_group | default('') }}"
+        sn_upsert_cmdb_ci: "{{ sn_cmdb_ci | default('') }}"
+        sn_upsert_correlation_id: >-
+          {{ sn_correlation_id | default('') | trim or (sn_correlation_prefix ~ ':manual:' ~ (sn_short_description | trim | lower | regex_replace('[^a-z0-9]+', '-'))[:60]) }}
+        sn_upsert_work_note: "Opened by AAP job {{ tower_job_id | default('local') }} ({{ tower_user_name | default('unknown user') }})."
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ sn_incident_number }}"
+            status: changed
+            summary: "Incident {{ sn_incident_number }} {{ sn_incident_action }}: {{ sn_short_description | truncate(120) }}"
+            details: {incident: "{{ sn_incident_number }}", action: "{{ sn_incident_action }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Create incident}

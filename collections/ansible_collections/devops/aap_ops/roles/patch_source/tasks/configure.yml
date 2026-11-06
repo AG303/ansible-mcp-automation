@@ -1,0 +1,164 @@
+---
+- name: Configure update source
+  block:
+    - name: Check source applies to this OS
+      ansible.builtin.set_fact:
+        _ps_applicable: >-
+          {{ (_src == 'vendor')
+             or (_src == 'satellite' and aap_ops_os == 'rhel')
+             or (_src == 'mirror' and aap_ops_os in ['rhel', 'ubuntu'])
+             or (_src == 'wsus' and aap_ops_is_windows) }}
+
+    - name: Skip when the source does not apply
+      when: not _ps_applicable
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: skipped
+          summary: "Source '{{ _src }}' does not apply to {{ aap_ops_os }}; unchanged"
+          details: {}
+
+    - name: Apply source
+      when: _ps_applicable
+      block:
+        - name: Validate endpoint variables for the selected source
+          ansible.builtin.assert:
+            that:
+              - _src != 'satellite' or (aap_ops_satellite_url | length > 0 and aap_ops_satellite_org | length > 0 and aap_ops_satellite_activation_key | length > 0)
+              - _src != 'mirror' or ((aap_ops_apt_mirror_url if aap_ops_os == 'ubuntu' else aap_ops_dnf_mirror_baseurl) | length > 0)
+              - _src != 'wsus' or aap_ops_wsus_url | length > 0
+            fail_msg: >-
+              Missing inventory variables for source '{{ _src }}'. Set aap_ops_satellite_* / aap_ops_dnf_mirror_baseurl /
+              aap_ops_apt_mirror_url / aap_ops_wsus_url / aap_ops_rhsm_* in host or group vars.
+            quiet: true
+
+        # ---------------- RHEL
+        - name: RHEL - Satellite consumer CA
+          when: aap_ops_os == 'rhel' and _src == 'satellite'
+          ansible.builtin.dnf:
+            name: "{{ aap_ops_satellite_url | regex_replace('/+$', '') }}/pub/katello-ca-consumer-latest.noarch.rpm"
+            state: present
+            disable_gpg_check: true
+
+        - name: RHEL - register to Satellite or Red Hat CDN
+          # vendor without aap_ops_rhsm_* keeps the existing CDN registration
+          when: >-
+            aap_ops_os == 'rhel' and
+            (_src == 'satellite' or (_src == 'vendor' and aap_ops_rhsm_org | length > 0 and aap_ops_rhsm_activation_key | length > 0))
+          community.general.redhat_subscription:
+            state: present
+            force_register: "{{ _src == 'satellite' }}"
+            server_hostname: "{{ (aap_ops_satellite_url | urlsplit('hostname')) if _src == 'satellite' else 'subscription.rhsm.redhat.com' }}"
+            org_id: "{{ aap_ops_satellite_org if _src == 'satellite' else aap_ops_rhsm_org }}"
+            activationkey: "{{ aap_ops_satellite_activation_key if _src == 'satellite' else aap_ops_rhsm_activation_key }}"
+          no_log: true
+          register: _ps_rhsm
+
+        - name: RHEL - mirror repositories
+          when: aap_ops_os == 'rhel' and _src == 'mirror'
+          ansible.builtin.yum_repository:
+            name: "aap-ops-mirror-{{ item | lower }}"
+            description: "Internal mirror {{ item }}"
+            baseurl: "{{ aap_ops_dnf_mirror_baseurl | regex_replace('/+$', '') }}/{{ item }}"
+            gpgcheck: true
+            gpgkey: file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+            enabled: true
+          loop: [BaseOS, AppStream]
+          register: _ps_repo
+
+        - name: RHEL - stop subscription-manager managing repos when using a mirror
+          when: aap_ops_os == 'rhel' and _src == 'mirror'
+          ansible.builtin.command: subscription-manager config --rhsm.manage_repos=0
+          changed_when: true
+          failed_when: false
+
+        - name: RHEL - remove mirror repos when returning to vendor/Satellite
+          when: aap_ops_os == 'rhel' and _src != 'mirror'
+          ansible.builtin.yum_repository:
+            name: "aap-ops-mirror-{{ item }}"
+            state: absent
+          loop: [baseos, appstream]
+
+        # ---------------- Ubuntu
+        - name: Ubuntu - write deb822 sources (24.04+)
+          when: aap_ops_os == 'ubuntu' and ansible_distribution_major_version | int >= 24
+          ansible.builtin.template:
+            src: ubuntu.sources.j2
+            dest: /etc/apt/sources.list.d/ubuntu.sources
+            mode: "0644"
+            backup: true
+          register: _ps_apt
+
+        - name: Ubuntu - write sources.list (22.04)
+          when: aap_ops_os == 'ubuntu' and ansible_distribution_major_version | int < 24
+          ansible.builtin.copy:
+            dest: /etc/apt/sources.list
+            mode: "0644"
+            backup: true
+            content: |
+              # Managed by Ansible (devops.aap_ops.patch_source) - source: {{ _src }}
+              deb {{ _apt_main }} {{ ansible_distribution_release }} main restricted universe multiverse
+              deb {{ _apt_main }} {{ ansible_distribution_release }}-updates main restricted universe multiverse
+              deb {{ _apt_sec }} {{ ansible_distribution_release }}-security main restricted universe multiverse
+          register: _ps_apt_legacy
+
+        - name: Ubuntu - refresh cache
+          when: aap_ops_os == 'ubuntu'
+          ansible.builtin.apt:
+            update_cache: true
+
+        # ---------------- Windows
+        - name: Windows - WSUS policy
+          when: aap_ops_is_windows and _src == 'wsus'
+          ansible.windows.win_regedit:
+            path: "{{ item.path }}"
+            name: "{{ item.name }}"
+            data: "{{ item.data }}"
+            type: "{{ item.type }}"
+          loop:
+            - {path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', name: WUServer, data: "{{ aap_ops_wsus_url }}", type: string}
+            - {path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', name: WUStatusServer, data: "{{ aap_ops_wsus_url }}", type: string}
+            - {path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', name: TargetGroupEnabled, data: "{{ 1 if aap_ops_wsus_target_group else 0 }}", type: dword}
+            - {path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', name: TargetGroup, data: "{{ aap_ops_wsus_target_group }}", type: string}
+            - {path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', name: UseWUServer, data: 1, type: dword}
+            - {path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', name: NoAutoUpdate, data: 1, type: dword}
+          loop_control:
+            label: "{{ item.name }}"
+          register: _ps_wsus
+
+        - name: Windows - use Microsoft Update (vendor)
+          when: aap_ops_is_windows and _src == 'vendor'
+          ansible.windows.win_regedit:
+            path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+            name: UseWUServer
+            data: 0
+            type: dword
+          register: _ps_wu
+
+        - name: Windows - restart Windows Update service to apply policy
+          when: aap_ops_is_windows and (_ps_wsus.changed | default(false) or _ps_wu.changed | default(false))
+          ansible.windows.win_service:
+            name: wuauserv
+            state: restarted
+
+        - name: Record result
+          ansible.builtin.set_fact:
+            aap_ops_host_result:
+              status: "{{ 'changed' if _chg else 'ok' }}"
+              summary: "Update source set to {{ _src }}{{ ' (' ~ _endpoint ~ ')' if _endpoint else '' }}{{ '' if _chg else ' - already configured' }}"
+              details: {source: "{{ _src }}", endpoint: "{{ _endpoint }}"}
+          vars:
+            _chg: >-
+              {{ (_ps_rhsm.changed | default(false)) or (_ps_repo.changed | default(false)) or (_ps_apt.changed | default(false))
+                 or (_ps_apt_legacy.changed | default(false)) or (_ps_wsus.changed | default(false)) or (_ps_wu.changed | default(false)) }}
+            _endpoint: >-
+              {{ {'satellite': aap_ops_satellite_url, 'wsus': aap_ops_wsus_url,
+                  'mirror': (aap_ops_apt_mirror_url if aap_ops_os == 'ubuntu' else aap_ops_dnf_mirror_baseurl),
+                  'vendor': ''}[_src] }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Configure update source}
+  vars:
+    _src: "{{ patch_source | default(aap_ops_patch_source | default('vendor')) }}"
+    _apt_main: "{{ aap_ops_apt_mirror_url if _src == 'mirror' else aap_ops_apt_vendor_url }}"
+    _apt_sec: "{{ (aap_ops_apt_security_mirror_url or aap_ops_apt_mirror_url) if _src == 'mirror' else aap_ops_apt_vendor_security_url }}"

@@ -1,0 +1,48 @@
+---
+# Creates an incident, or - when an active incident with the same correlation_id
+# exists - adds a work note to it instead (de-duplication for repeated failures).
+# Output: sn_incident_number, sn_incident_action (created|updated)
+- name: Look for an active incident with the same correlation ID
+  servicenow.itsm.api_info:
+    resource: incident
+    sysparm_query: "active=true^correlation_id={{ sn_upsert_correlation_id | truncate(100, true, '') }}"
+    columns: [sys_id, number, state, short_description]
+  register: _sn_dupe
+
+- name: Add work note to existing incident
+  when: _sn_dupe.record | length > 0
+  servicenow.itsm.api:
+    resource: incident
+    action: patch
+    sys_id: "{{ _sn_dupe.record[0].sys_id }}"
+    data:
+      work_notes: "{{ ('Repeat occurrence detected by AAP.' ~ '\n\n' ~ (sn_upsert_work_note | default('') or sn_upsert_description | default(''))) | truncate(30000) }}"
+  register: _sn_upd
+
+- name: Create incident
+  when: _sn_dupe.record | length == 0
+  servicenow.itsm.api:
+    resource: incident
+    action: post
+    data: "{{ _sn_inc_data | combine(_sn_inc_optional) }}"
+  register: _sn_new
+  vars:
+    _sn_inc_data:
+      short_description: "{{ sn_upsert_short_description | truncate(160) }}"
+      description: "{{ sn_upsert_description | default('') | truncate(30000) }}"
+      impact: "{{ sn_impact_map[sn_upsert_impact | default('medium')] }}"
+      urgency: "{{ sn_impact_map[sn_upsert_urgency | default('medium')] }}"
+      caller_id: "{{ sn_default_caller }}"
+      contact_type: "{{ sn_contact_type | default('integration') }}"
+      correlation_id: "{{ sn_upsert_correlation_id | truncate(100, true, '') }}"
+      correlation_display: "{{ sn_correlation_display }}"
+      work_notes: "{{ sn_upsert_work_note | default('') | truncate(30000) }}"
+    _sn_inc_optional: >-
+      {{ ({'assignment_group': (sn_upsert_assignment_group | default('') or sn_default_assignment_group)}
+          if (sn_upsert_assignment_group | default('') or sn_default_assignment_group) else {})
+         | combine({'cmdb_ci': sn_upsert_cmdb_ci} if sn_upsert_cmdb_ci | default('') else {}) }}
+
+- name: Record incident result
+  ansible.builtin.set_fact:
+    sn_incident_number: "{{ _sn_dupe.record[0].number if _sn_dupe.record | length > 0 else _sn_new.record.number }}"
+    sn_incident_action: "{{ 'updated' if _sn_dupe.record | length > 0 else 'created' }}"

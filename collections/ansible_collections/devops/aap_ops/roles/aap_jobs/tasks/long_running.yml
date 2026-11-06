@@ -1,0 +1,32 @@
+---
+- name: Long-running jobs
+  block:
+    - name: Get running jobs
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/unified_jobs/"
+        aap_api_query: {status: running, order_by: started, not__type: system_job}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _long }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for j in aap_api_results if j.started -%}
+          {%-   set mins = ((now().timestamp() - ((j.started[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 60) | int -%}
+          {%-   set _ = out.append({'host': j.name ~ ' #' ~ j.id, 'status': 'warn' if mins > (max_minutes | default(120) | int) else 'ok',
+                 'summary': 'running ' ~ mins ~ ' min on ' ~ (j.execution_node | default('') or j.controller_node | default('?')),
+                 'details': {'job_id': j.id, 'type': j.type, 'minutes': mins, 'launched_by': j.summary_fields.launched_by.name | default('')}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _long: "{{ _rows | selectattr('status', 'equalto', 'warn') | list }}"
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _long | length > 0 else 'ok' }}"
+          summary: "{{ aap_api_results | length }} running job(s); {{ _long | length }} over {{ max_minutes | default(120) }} min"
+          details: {running: "{{ _rows }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Long-running jobs}

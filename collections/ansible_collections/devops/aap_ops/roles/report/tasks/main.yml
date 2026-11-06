@@ -1,0 +1,117 @@
+---
+# Run at the end of every play. Each host must have set the fact
+#   aap_ops_host_result: {status: ok|warn|fail|changed|skipped, summary: "...", details: <dict|list>}
+# API roles may instead set aap_ops_report_rows (list of {host,status,summary,details}),
+# one row per object inspected (job, template, CR, record).
+# Hosts that never set it (unreachable, failed early) are reported as "fail".
+# Host plays call this from a second play on localhost with
+#   aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+# API plays (hosts: localhost) call it in the same play.
+- name: Build aggregated result
+  run_once: true
+  ansible.builtin.set_fact:
+    _aap_ops_rows: >-
+      {%- set rows = [] -%}
+      {%- for r in aap_ops_report_rows | default([]) -%}
+      {%-   set _ = rows.append({'host': r.host | default(r.name | default('item')),
+                               'status': r.status | default('ok'),
+                               'summary': r.summary | default(''),
+                               'details': r.details | default({})}) -%}
+      {%- endfor -%}
+      {%- for h in ([] if aap_ops_report_rows is defined else (aap_ops_report_hosts | default(ansible_play_hosts_all))) -%}
+      {%-   set r = hostvars[h].aap_ops_host_result | default({}) -%}
+      {%-   set _ = rows.append({'host': h,
+                               'status': r.status | default('fail'),
+                               'summary': r.summary | default('no result recorded (host unreachable or failed before reporting)'),
+                               'details': r.details | default({})}) -%}
+      {%- endfor -%}
+      {{ rows }}
+
+- name: Summarise status counts
+  run_once: true
+  ansible.builtin.set_fact:
+    _aap_ops_counts: >-
+      {%- set c = {'ok': 0, 'warn': 0, 'fail': 0, 'changed': 0, 'skipped': 0} -%}
+      {%- for r in _aap_ops_rows -%}
+      {%-   set _ = c.update({r.status: (c[r.status] | default(0)) + 1}) -%}
+      {%- endfor -%}
+      {{ c }}
+    _aap_ops_generated: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Publish aap_ops_result artifact (readable by agents through the MCP server job output)
+  run_once: true
+  ansible.builtin.set_stats:
+    per_host: false
+    aggregate: false
+    data:
+      aap_ops_result:
+        template: "{{ aap_ops_report_title }}"
+        job_id: "{{ tower_job_id | default(awx_job_id | default('local')) }}"
+        generated: "{{ _aap_ops_generated }}"
+        overall: >-
+          {{ 'fail' if _aap_ops_counts.fail | int > 0 else
+             ('warn' if _aap_ops_counts.warn | int > 0 else
+             ('changed' if _aap_ops_counts.changed | int > 0 else 'ok')) }}
+        counts: "{{ _aap_ops_counts }}"
+        hosts: >-
+          {%- set out = [] -%}
+          {%- for r in (_aap_ops_rows | sort(attribute='status'))[:aap_ops_stats_max_hosts | int] -%}
+          {%-   set d = r.details | to_json -%}
+          {%-   set _ = out.append({'host': r.host, 'status': r.status, 'summary': r.summary,
+                                    'details': (r.details if d | length <= aap_ops_stats_detail_chars | int
+                                                else (d[:aap_ops_stats_detail_chars | int] ~ '...[truncated]'))}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+- name: Write reports
+  run_once: true
+  delegate_to: localhost
+  block:
+    - name: Ensure report directory exists
+      ansible.builtin.file:
+        path: "{{ aap_ops_report_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Write JSON report
+      when: "'json' in aap_ops_report_formats"
+      ansible.builtin.copy:
+        dest: "{{ aap_ops_report_dir }}/{{ _aap_ops_slug }}.json"
+        content: "{{ {'template': aap_ops_report_title, 'generated': _aap_ops_generated, 'counts': _aap_ops_counts, 'hosts': _aap_ops_rows} | to_nice_json }}"
+        mode: "0640"
+
+    - name: Write HTML report
+      when: "'html' in aap_ops_report_formats"
+      ansible.builtin.template:
+        src: report.html.j2
+        dest: "{{ aap_ops_report_dir }}/{{ _aap_ops_slug }}.html"
+        mode: "0640"
+  vars:
+    _aap_ops_slug: "{{ aap_ops_report_title | regex_replace('[^A-Za-z0-9]+', '_') | lower }}_{{ tower_job_id | default('local') }}"
+  rescue:
+    - name: Report files could not be written (artifact was still published)
+      ansible.builtin.debug:
+        msg: "Could not write report files to {{ aap_ops_report_dir }}; the aap_ops_result artifact is still available."
+
+- name: Print summary
+  run_once: true
+  ansible.builtin.debug:
+    msg:
+      - "{{ aap_ops_report_title }}: ok={{ _aap_ops_counts.ok }} warn={{ _aap_ops_counts.warn }} fail={{ _aap_ops_counts.fail }} changed={{ _aap_ops_counts.changed }} skipped={{ _aap_ops_counts.skipped }}"
+      - "{{ _aap_ops_rows | selectattr('status', 'in', ['fail', 'warn']) | map(attribute='host') | zip(_aap_ops_rows | selectattr('status', 'in', ['fail', 'warn']) | map(attribute='summary')) | map('join', ': ') | list }}"
+
+- name: Fail when nothing was targeted
+  run_once: true
+  ansible.builtin.assert:
+    that: _aap_ops_rows | length > 0
+    fail_msg: No hosts matched the target pattern or launch limit.
+    quiet: true
+
+- name: Fail the job when hosts are in a failing status
+  run_once: true
+  ansible.builtin.assert:
+    that: _aap_ops_rows | selectattr('status', 'in', aap_ops_fail_on_status) | list | length == 0
+    fail_msg: >-
+      {{ _aap_ops_rows | selectattr('status', 'in', aap_ops_fail_on_status) | map(attribute='host') | list | length }}
+      host(s) reported {{ aap_ops_fail_on_status | join('/') }} - see aap_ops_result in the job artifacts.
+    success_msg: No host reported {{ aap_ops_fail_on_status | join('/') }}.

@@ -1,0 +1,4 @@
+---
+# Entry point. Playbooks call this role with tasks_from: <check>.yml
+- name: Default to health check
+  ansible.builtin.include_tasks: health_check.yml

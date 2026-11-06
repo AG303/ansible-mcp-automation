@@ -1,0 +1,55 @@
+---
+- name: Operator lifecycle status
+  block:
+    - name: Get ClusterServiceVersions
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ aap_namespace }}"
+      register: _csv
+
+    - name: Get Subscriptions
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: "{{ aap_namespace }}"
+      register: _subs
+
+    - name: Get InstallPlans
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: InstallPlan
+        namespace: "{{ aap_namespace }}"
+      register: _ips
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ _csv_rows + _sub_rows + _ip_rows }}"
+      vars:
+        _aap_csv: "{{ _csv.resources | selectattr('metadata.name', 'search', 'aap-operator|ansible-automation-platform') | list }}"
+        _csv_rows: >-
+          {%- set out = [] -%}
+          {%- for c in _aap_csv -%}
+          {%-   set _ = out.append({'host': 'csv/' ~ c.metadata.name, 'status': 'ok' if c.status.phase | default('') == 'Succeeded' else 'fail',
+                   'summary': 'phase ' ~ c.status.phase | default('?') ~ ', version ' ~ c.spec.version | default('?') ~ ((', ' ~ c.status.message) if c.status.phase | default('') != 'Succeeded' else ''),
+                   'details': {'replaces': c.spec.replaces | default('')}}) -%}
+          {%- endfor -%}
+          {{ out if out else [{'host': 'csv', 'status': 'fail', 'summary': 'No AAP operator CSV found in ' ~ aap_namespace, 'details': {}}] }}
+        _sub_rows: >-
+          {%- set out = [] -%}
+          {%- for s in _subs.resources -%}
+          {%-   set upgrade = s.status.currentCSV | default('') != s.status.installedCSV | default('') -%}
+          {%-   set _ = out.append({'host': 'subscription/' ~ s.metadata.name, 'status': 'warn' if upgrade else 'ok',
+                   'summary': 'channel ' ~ s.spec.channel | default('?') ~ ', approval ' ~ s.spec.installPlanApproval | default('Automatic')
+                              ~ ', installed ' ~ s.status.installedCSV | default('?') ~ ((', upgrade available to ' ~ s.status.currentCSV) if upgrade else ''),
+                   'details': {'source': s.spec.source | default(''), 'state': s.status.state | default('')}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _ip_rows: >-
+          {{ _ips.resources | selectattr('spec.approved', 'equalto', false) | map(attribute='metadata.name')
+             | map('regex_replace', '^', 'installplan/') | map('community.general.dict_kv', 'host')
+             | map('combine', {'status': 'warn', 'summary': 'InstallPlan awaiting manual approval', 'details': {}}) | list }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Operator status}

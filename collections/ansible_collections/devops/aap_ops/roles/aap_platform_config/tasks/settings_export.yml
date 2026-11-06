@@ -1,0 +1,51 @@
+---
+# Exports platform settings and object inventories to JSON in the report dir.
+# Secrets are never exported: AAP returns $encrypted$ for secret fields and
+# this task additionally redacts keys that look secret.
+- name: Settings export
+  block:
+    - name: Get all settings
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/settings/all/"
+
+    - name: Redact
+      ansible.builtin.set_fact:
+        _settings: >-
+          {%- set o = {} -%}
+          {%- for k, v in aap_api_response.json.items() -%}
+          {%-   set _ = o.update({k: '$redacted$' if (k is search('(?i)(password|secret|token|key)$') and v) else v}) -%}
+          {%- endfor -%}
+          {{ o }}
+
+    - name: Inventory platform objects
+      ansible.builtin.include_tasks: _export_objects.yml
+      loop: [organizations, teams, projects, inventories, job_templates, workflow_job_templates, credentials, execution_environments, schedules, notification_templates]
+      loop_control: {loop_var: _obj_type}
+
+    - name: Write export
+      ansible.builtin.copy:
+        dest: "{{ aap_ops_report_dir | default('/tmp/aap_ops_reports') }}/aap_settings_export_{{ tower_job_id | default('local') }}.json"
+        content: "{{ {'generated': now(utc=true).isoformat(), 'settings': _settings, 'objects': _objects | default({})} | to_nice_json }}"
+        mode: "0640"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: settings
+            status: ok
+            summary: >-
+              {{ _settings | length }} settings exported ({{ _settings | dict2items | selectattr('value', 'equalto', '$redacted$') | list | length }} redacted)
+              to {{ aap_ops_report_dir | default('/tmp/aap_ops_reports') }}/aap_settings_export_{{ tower_job_id | default('local') }}.json
+            details:
+              object_counts: "{{ dict(_objects | default({}) | dict2items | map(attribute='key') | zip(_objects | default({}) | dict2items | map(attribute='value') | map('length'))) }}"
+              key_settings:
+                AUTOMATION_ANALYTICS_GATHER_INTERVAL: "{{ _settings.AUTOMATION_ANALYTICS_GATHER_INTERVAL | default('') }}"
+                DEFAULT_JOB_TIMEOUT: "{{ _settings.DEFAULT_JOB_TIMEOUT | default('') }}"
+                LOG_AGGREGATOR_ENABLED: "{{ _settings.LOG_AGGREGATOR_ENABLED | default('') }}"
+                ACTIVITY_STREAM_ENABLED: "{{ _settings.ACTIVITY_STREAM_ENABLED | default('') }}"
+                MAX_FORKS: "{{ _settings.MAX_FORKS | default('') }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Settings export}

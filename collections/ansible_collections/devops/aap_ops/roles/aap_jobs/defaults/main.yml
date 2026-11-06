@@ -1,0 +1,7 @@
+---
+# Templates this role must never cancel, toggle or relaunch (protects the
+# agent-facing tooling itself and platform system jobs).
+aap_jobs_protected_name_regex: '^(WF - |SN - Change|AAP Ops - Protected)'
+aap_jobs_max_cancel: 25
+aap_jobs_max_toggle: 25
+aap_jobs_finished_states: [successful, failed, error, canceled]

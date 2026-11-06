@@ -1,0 +1,94 @@
+---
+- name: Change conflict check
+  block:
+    - name: Validate window
+      ansible.builtin.assert:
+        that:
+          - sn_planned_start | default('') is match('^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+          - sn_planned_end | default('') is match('^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+          - sn_planned_end > sn_planned_start
+        fail_msg: sn_planned_start < sn_planned_end required, UTC 'YYYY-MM-DD HH:MM:SS'.
+        quiet: true
+
+    - name: Resolve hosts to CIs
+      ansible.builtin.include_tasks: _ci_lookup.yml
+      vars:
+        _ci_names: "{{ (sn_affected_hosts | default('')).split(',') | map('trim') | select | list }}"
+
+    - name: Changes overlapping the window (any CI)
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: change_request
+        sn_q_query: >-
+          active=true^stateNOT IN{{ sn_change_state_map.closed }},{{ sn_change_state_map.canceled }}^start_date<{{ sn_planned_end }}^end_date>{{ sn_planned_start }}
+        sn_q_fields: [sys_id, number, short_description, state, approval, start_date, end_date, cmdb_ci]
+        sn_q_limit: 500
+
+    - name: Keep overlapping changes
+      ansible.builtin.set_fact:
+        _overlap: "{{ sn_q_records }}"
+
+    - name: Affected-CI links for overlapping changes
+      when: _overlap | length > 0 and _ci_found | length > 0
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: task_ci
+        sn_q_query: "taskIN{{ _overlap | map(attribute='sys_id') | join(',') }}^ci_itemIN{{ _ci_found | map(attribute='sys_id') | join(',') }}"
+        sn_q_fields: [task, ci_item]
+        sn_q_limit: 2000
+
+    - name: Keep CI links
+      ansible.builtin.set_fact:
+        _task_ci: "{{ sn_q_records if (_overlap | length > 0 and _ci_found | length > 0) else [] }}"
+
+    - name: Blackout spans overlapping the window
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: cmn_schedule_span
+        sn_q_query: "schedule.type=blackout"
+        sn_q_fields: [name, schedule.name, start_date_time, end_date_time, repeat_type]
+        sn_q_display: "false"
+        sn_q_limit: 500
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _conf_rows + _bo_rows }}"
+      vars:
+        _ci_ids: "{{ _ci_found | map(attribute='sys_id') | list }}"
+        _conf_rows: >-
+          {%- set out = [] -%}
+          {%- set links = _task_ci | default([]) -%}
+          {%- for c in _overlap -%}
+          {%-   set hit = c.cmdb_ci in _ci_ids or (links | selectattr('task', 'equalto', c.sys_id) | list | length > 0) -%}
+          {%-   if hit or not _ci_ids -%}
+          {%-     set _ = out.append({'host': c.number, 'status': 'warn' if hit else 'ok',
+                     'summary': ('CI conflict' if hit else 'overlapping window (no CI filter)') ~ ': ' ~ c.start_date ~ ' - ' ~ c.end_date ~ ' | ' ~ c.short_description | truncate(90),
+                     'details': {'approval': c.approval, 'state': c.state}}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        _bo_rows: >-
+          {%- set out = [] -%}
+          {%- set ps = sn_planned_start | replace('-', '') | replace(':', '') | replace(' ', 'T') -%}
+          {%- set pe = sn_planned_end | replace('-', '') | replace(':', '') | replace(' ', 'T') -%}
+          {%- for b in sn_q_records | default([]) if b.start_date_time is defined -%}
+          {%-   set bs = b.start_date_time | string | replace('-', '') | replace(':', '') | replace(' ', 'T') -%}
+          {%-   set be = b.end_date_time | string | replace('-', '') | replace(':', '') | replace(' ', 'T') -%}
+          {%-   if (b.repeat_type | default('') not in ['', 'none'] ) or (bs < pe and be > ps) -%}
+          {%-     set _ = out.append({'host': 'blackout: ' ~ b['schedule.name'] | default('?'), 'status': 'warn' if (bs < pe and be > ps) else 'ok',
+                     'summary': b.name ~ ' ' ~ b.start_date_time ~ ' - ' ~ b.end_date_time ~ ((' (repeats ' ~ b.repeat_type ~ ', verify manually)') if b.repeat_type | default('') not in ['', 'none'] else ''),
+                     'details': {}}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if (_conf_rows + _bo_rows) | selectattr('status', 'equalto', 'warn') | list else 'ok' }}"
+          summary: >-
+            Window {{ sn_planned_start }} - {{ sn_planned_end }} UTC; {{ _overlap | length }} overlapping change(s),
+            {{ _conf_rows | selectattr('status', 'equalto', 'warn') | list | length }} on the same CI(s); {{ _bo_rows | selectattr('status', 'equalto', 'warn') | list | length }} blackout overlap(s)
+          details: {cis_resolved: "{{ _ci_found | map(attribute='name') | list }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Change conflict check}

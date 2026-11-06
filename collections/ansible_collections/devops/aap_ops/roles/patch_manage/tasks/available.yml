@@ -1,0 +1,21 @@
+---
+- name: Available updates
+  block:
+    - name: List updates
+      ansible.builtin.include_tasks: _list_updates.yml
+      vars:
+        _sec_only: "{{ security_only | default('no') | bool }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'warn' if _updates | selectattr('security') | list | length > 0 else 'ok' }}"
+          summary: "{{ _updates | length }} update(s) available, {{ _updates | selectattr('security') | list | length }} security"
+          details:
+            count: "{{ _updates | length }}"
+            security_count: "{{ _updates | selectattr('security') | list | length }}"
+            updates: "{{ _updates[:patch_manage_max_list] }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Available updates}

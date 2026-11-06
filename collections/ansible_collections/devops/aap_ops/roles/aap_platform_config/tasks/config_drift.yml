@@ -1,0 +1,74 @@
+---
+- name: Config-as-code drift
+  block:
+    - name: Load desired configuration from the project
+      ansible.builtin.include_vars:
+        dir: "{{ aap_platform_config_vars_dir }}"
+        extensions: [yml, yaml]
+
+    - name: Get live job templates
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/job_templates/"
+
+    - name: Keep job templates
+      ansible.builtin.set_fact:
+        _live_jt: "{{ aap_api_results }}"
+
+    - name: Get live workflow templates
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/workflow_job_templates/"
+
+    - name: Compare
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _jt_rows + _wf_rows + _extra_rows }}"
+      vars:
+        _desired_jt: "{{ controller_templates | default([]) }}"
+        _desired_wf: "{{ controller_workflows | default([]) }}"
+        _jt_rows: >-
+          {%- set out = [] -%}
+          {%- for d in _desired_jt -%}
+          {%-   set l = _live_jt | selectattr('name', 'equalto', d.name) | first | default({}) -%}
+          {%-   if not l -%}
+          {%-     set _ = out.append({'host': d.name, 'status': 'fail', 'summary': 'missing in AAP', 'details': {}}) -%}
+          {%-   else -%}
+          {%-     set live = {'playbook': l.playbook, 'job_type': l.job_type, 'survey_enabled': l.survey_enabled,
+                              'ask_limit_on_launch': l.ask_limit_on_launch, 'ask_variables_on_launch': l.ask_variables_on_launch,
+                              'inventory': l.summary_fields.inventory.name | default(''), 'project': l.summary_fields.project.name | default(''),
+                              'execution_environment': l.summary_fields.execution_environment.name | default('')} -%}
+          {%-     set diffs = [] -%}
+          {%-     for f in aap_platform_config_drift_fields if f in d and (d[f] | string) != (live[f] | string) -%}
+          {%-       set _ = diffs.append(f ~ ': live=' ~ live[f] ~ ' desired=' ~ d[f]) -%}
+          {%-     endfor -%}
+          {%-     if diffs -%}{%- set _ = out.append({'host': d.name, 'status': 'warn', 'summary': 'drift - ' ~ diffs | join('; '), 'details': {'diffs': diffs}}) -%}{%- endif -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        _wf_rows: >-
+          {%- set out = [] -%}
+          {%- for d in _desired_wf if d.name not in (aap_api_results | map(attribute='name') | list) -%}
+          {%-   set _ = out.append({'host': d.name, 'status': 'fail', 'summary': 'workflow missing in AAP', 'details': {}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _extra_rows: >-
+          {%- set out = [] -%}
+          {%- set known = (_desired_jt + _desired_wf) | map(attribute='name') | list -%}
+          {%- for l in _live_jt + aap_api_results if l.name not in known -%}
+          {%-   for p in aap_platform_config_managed_prefixes if l.name.startswith(p) -%}
+          {%-     set _ = out.append({'host': l.name, 'status': 'warn', 'summary': 'exists in AAP but not in config-as-code (manual change?)', 'details': {'id': l.id}}) -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'fail' if (_jt_rows + _wf_rows) | selectattr('status', 'equalto', 'fail') | list else ('warn' if (_jt_rows + _extra_rows) else 'ok') }}"
+          summary: >-
+            desired {{ _desired_jt | length }} job templates / {{ _desired_wf | length }} workflows;
+            {{ (_jt_rows + _wf_rows) | selectattr('status', 'equalto', 'fail') | list | length }} missing,
+            {{ _jt_rows | selectattr('status', 'equalto', 'warn') | list | length }} drifted, {{ _extra_rows | length }} unmanaged extra(s)
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Config drift}

@@ -1,0 +1,37 @@
+---
+- name: Schedule audit
+  block:
+    - name: Get schedules
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/schedules/"
+        aap_api_query: "{{ {'order_by': 'next_run'} | combine({'name__icontains': name_filter} if name_filter | default('') | length > 0 else {}) }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for s in aap_api_results -%}
+          {%-   set ujt = s.summary_fields.unified_job_template | default({}) -%}
+          {%-   set issues = [] -%}
+          {%-   if s.enabled and not s.next_run -%}{%- set _ = issues.append('enabled but no next run (expired rrule)') -%}{%- endif -%}
+          {%-   if not ujt -%}{%- set _ = issues.append('template missing') -%}{%- endif -%}
+          {%-   if s.enabled and ujt.last_job_failed | default(false) -%}{%- set _ = issues.append('last run of template failed') -%}{%- endif -%}
+          {%-   set _ = out.append({'host': s.name, 'status': 'warn' if issues else ('skipped' if not s.enabled else 'ok'),
+                 'summary': ('enabled' if s.enabled else 'disabled') ~ ', next ' ~ (s.next_run or 'never') ~ ', template ' ~ ujt.name | default('?') ~ ((' - ' ~ issues | join('; ')) if issues else ''),
+                 'details': {'id': s.id, 'rrule': s.rrule, 'timezone': s.timezone | default(''), 'template': ujt.name | default(''), 'issues': issues}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _rows | selectattr('status', 'equalto', 'warn') | list | length > 0 else 'ok' }}"
+          summary: >-
+            {{ aap_api_results | length }} schedule(s): {{ aap_api_results | selectattr('enabled') | list | length }} enabled,
+            {{ _rows | selectattr('status', 'equalto', 'warn') | list | length }} with issues
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Schedule audit}

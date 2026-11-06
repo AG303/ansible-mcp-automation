@@ -1,0 +1,78 @@
+---
+# cert_paths: Linux - comma separated PEM files or directories (default /etc/pki/tls/certs or /etc/ssl/certs
+#             is NOT scanned to avoid CA bundles; pass explicit paths). Windows - certificate store paths,
+#             default Cert:\LocalMachine\My.
+# tls_endpoints: comma separated host:port checked from each host.
+- name: TLS certificate expiry
+  block:
+    - name: Linux - inspect certificates
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        now=$(date +%s)
+        check() { # $1 label, stdin PEM
+          end=$(openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2) || return 0
+          [ -z "$end" ] && return 0
+          days=$(( ( $(date -d "$end" +%s) - now ) / 86400 ))
+          printf '{"source":"%s","days_left":%s,"not_after":"%s"}\n' "$1" "$days" "$end"
+        }
+        for p in $(echo {{ (cert_paths | default('')) | quote }} | tr ',' ' '); do
+          if [ -d "$p" ]; then files=$(find "$p" -maxdepth 1 -type f \( -name '*.crt' -o -name '*.pem' -o -name '*.cer' \)); else files="$p"; fi
+          for f in $files; do [ -r "$f" ] && check "$f" < "$f"; done
+        done
+        for e in $(echo {{ (tls_endpoints | default('')) | quote }} | tr ',' ' '); do
+          h=${e%:*}
+          timeout 10 openssl s_client -connect "$e" -servername "$h" </dev/null 2>/dev/null | check "$e" ||
+            printf '{"source":"%s","days_left":null,"error":"connect failed"}\n' "$e"
+        done
+        true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: _ce_linux
+
+    - name: Windows - inspect certificate stores and endpoints
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $out = @()
+        $stores = '{{ cert_paths | default('') }}'.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        if (-not $stores) { $stores = @('Cert:\LocalMachine\My') }
+        foreach ($s in $stores) {
+          Get-ChildItem -Path $s -ErrorAction SilentlyContinue | Where-Object { $_.NotAfter } | ForEach-Object {
+            $out += @{ source = "$s\$($_.Thumbprint) $($_.Subject)"; days_left = [int]($_.NotAfter - (Get-Date)).TotalDays; not_after = $_.NotAfter.ToString('s') } } }
+        foreach ($e in ('{{ tls_endpoints | default('') }}'.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+          try {
+            $h, $p = $e.Split(':'); $c = New-Object Net.Sockets.TcpClient($h, [int]$p)
+            $ssl = New-Object Net.Security.SslStream($c.GetStream(), $false, { $true }); $ssl.AuthenticateAsClient($h)
+            $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
+            $out += @{ source = $e; days_left = [int]($cert.NotAfter - (Get-Date)).TotalDays; not_after = $cert.NotAfter.ToString('s') }
+            $c.Close()
+          } catch { $out += @{ source = $e; days_left = $null; error = 'connect failed' } } }
+        ConvertTo-Json -InputObject @($out) -Compress
+      changed_when: false
+      check_mode: false
+      register: _ce_win
+
+    - name: Normalise
+      ansible.builtin.set_fact:
+        _ce: >-
+          {{ ((_ce_win.stdout | trim or '[]') | from_json) if aap_ops_is_windows
+             else (_ce_linux.stdout_lines | map('from_json') | list) }}
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if (_ce | selectattr('days_left', 'number') | selectattr('days_left', '<', 0) | list | length > 0
+                          or _ce | selectattr('error', 'defined') | list | length > 0)
+               else ('warn' if _ce | selectattr('days_left', 'number') | selectattr('days_left', '<=', warn_days | default(30) | int) | list | length > 0
+               else 'ok') }}
+          summary: >-
+            {%- set soon = _ce | selectattr('days_left', 'number') | selectattr('days_left', '<=', warn_days | default(30) | int) | list -%}
+            {{ _ce | length }} certificate(s) checked; {{ soon | length }} expire within {{ warn_days | default(30) }} days{{ (': ' ~ (soon | map(attribute='source') | map('truncate', 60) | join(', '))) if soon else '' }}
+          details: {certificates: "{{ _ce }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Certificate expiry}

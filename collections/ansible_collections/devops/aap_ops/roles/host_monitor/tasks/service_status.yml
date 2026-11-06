@@ -1,0 +1,55 @@
+---
+- name: Service status
+  block:
+    - name: Collect service facts
+      ansible.builtin.service_facts:
+      when: not aap_ops_is_windows
+
+    - name: Windows - query services
+      when: aap_ops_is_windows
+      ansible.windows.win_service_info:
+        name: "{{ item }}"
+      loop: "{{ _svc_names }}"
+      register: _svc_win
+
+    - name: Build service table
+      ansible.builtin.set_fact:
+        _svc: >-
+          {%- set out = [] -%}
+          {%- for n in _svc_names -%}
+          {%-   if aap_ops_is_windows -%}
+          {%-     set r = (_svc_win.results | selectattr('item', 'equalto', n) | first) -%}
+          {%-     set s = r.services | default([]) | first | default({}) -%}
+          {%-     set _ = out.append({'name': n, 'installed': s | length > 0, 'running': s.state | default('') == 'started', 'enabled': s.start_mode | default('') in ['auto', 'delayed'], 'state': s.state | default('missing')}) -%}
+          {%-   else -%}
+          {%-     set key = n if n in ansible_facts.services else n ~ '.service' -%}
+          {%-     set s = ansible_facts.services[key] | default({}) -%}
+          {%-     set _ = out.append({'name': n, 'installed': s | length > 0, 'running': s.state | default('') == 'running', 'enabled': s.status | default('') in ['enabled', 'static', 'alias'], 'state': s.state | default('missing')}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if _svc | selectattr('installed') | rejectattr('running') | list | length > 0
+               else ('warn' if (_svc | rejectattr('installed') | list | length > 0 or _svc | rejectattr('enabled') | list | length > 0) else 'ok') }}
+          summary: >-
+            {%- set down = _svc | selectattr('installed') | rejectattr('running') | map(attribute='name') | list -%}
+            {%- set miss = _svc | rejectattr('installed') | map(attribute='name') | list -%}
+            {{ ('Not running: ' ~ down | join(', ') ~ '. ') if down else '' }}{{ ('Not installed: ' ~ miss | join(', ') ~ '. ') if miss else '' }}{{ 'All ' ~ _svc | length ~ ' services running' if not down and not miss else '' }}
+          details: {services: "{{ _svc }}"}
+  vars:
+    # Common Linux unit names are translated per OS (e.g. sshd -> ssh on Ubuntu).
+    _svc_names: >-
+      {%- set a = host_monitor_service_aliases[aap_ops_os] | default({}) -%}
+      {%- set out = [] -%}
+      {%- for n in (service_names | default('sshd,chronyd')).split(',') | map('trim') | select -%}
+      {%-   set _ = out.append(a[n] | default(n)) -%}
+      {%- endfor -%}
+      {{ out | unique }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Service status}

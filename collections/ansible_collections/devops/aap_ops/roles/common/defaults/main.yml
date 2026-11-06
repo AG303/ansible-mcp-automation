@@ -1,0 +1,5 @@
+---
+aap_ops_target: all
+aap_ops_gather_subset: [min, hardware, network, virtual, mounts]
+# Playbooks narrow this for Linux-only templates.
+aap_ops_supported_os: [rhel, ubuntu, windows]

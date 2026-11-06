@@ -1,0 +1,15 @@
+---
+# Input: _ci_names (list of host names). Output: _ci_found (list of {name, sys_id}).
+- name: Look up configuration items
+  when: _ci_names | length > 0
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+  vars:
+    sn_q_table: cmdb_ci
+    sn_q_query: >-
+      nameIN{{ (_ci_names + (_ci_names | map('regex_replace', '\..*$', '') | list)) | unique | join(',') }}
+    sn_q_fields: [sys_id, name, sys_class_name]
+    sn_q_limit: 1000
+
+- name: Record CIs
+  ansible.builtin.set_fact:
+    _ci_found: "{{ (sn_q_records | default([])) if _ci_names | length > 0 else [] }}"

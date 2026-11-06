@@ -1,0 +1,77 @@
+---
+# CHANGING. Package caches, rotated logs, journal vacuum and temp files older than N days.
+- name: Disk cleanup
+  block:
+    - name: Measure free space before
+      ansible.builtin.include_tasks: _free_space.yml
+
+    - name: Capture before
+      ansible.builtin.set_fact:
+        _dc_before: "{{ _free_mb }}"
+
+    - name: RHEL - clean dnf cache
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.command: dnf clean all
+      register: _dc_pkg
+      changed_when: true
+
+    - name: Ubuntu - clean apt cache and orphaned packages
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.apt:
+        autoclean: true
+        autoremove: true
+      register: _dc_pkg
+
+    - name: Linux - vacuum journal
+      when: not aap_ops_is_windows
+      ansible.builtin.command: journalctl --vacuum-size={{ journal_max_size | default('500M') }}
+      register: _dc_journal
+      changed_when: "'freed 0B' not in _dc_journal.stderr"
+      failed_when: false
+
+    - name: Linux - remove rotated/compressed logs older than N days
+      when: not aap_ops_is_windows
+      ansible.builtin.command: >-
+        find /var/log -type f ( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' )
+        -mtime +{{ older_than_days | default(14) | int }} -print -delete
+      register: _dc_logs
+      changed_when: _dc_logs.stdout | length > 0
+
+    - name: Linux - remove temp files older than N days
+      when: not aap_ops_is_windows
+      ansible.builtin.command: >-
+        find {{ host_monitor_cleanup_paths_linux | join(' ') }} -xdev -type f -atime +{{ older_than_days | default(14) | int }} -print -delete
+      register: _dc_tmp
+      changed_when: _dc_tmp.stdout | length > 0
+      failed_when: false
+
+    - name: Windows - remove temp files and run component cleanup
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $cut = (Get-Date).AddDays(-{{ older_than_days | default(14) | int }})
+        $n = 0
+        foreach ($p in @('{{ host_monitor_cleanup_paths_windows | join("','") }}', "$env:SystemRoot\SoftwareDistribution\Download")) {
+          Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt $cut } |
+            ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $n++ } catch {} } }
+        Get-ChildItem "$env:SystemRoot\Logs\CBS\*.log" -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt $cut } | Remove-Item -Force -ErrorAction SilentlyContinue
+        "removed=$n"
+      register: _dc_win
+      changed_when: "'removed=0' not in _dc_win.stdout"
+
+    - name: Measure free space after
+      ansible.builtin.include_tasks: _free_space.yml
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: changed
+          summary: "Reclaimed {{ ((_free_mb | int) - (_dc_before | int)) }} MB on the system volume"
+          details:
+            free_mb_before: "{{ _dc_before }}"
+            free_mb_after: "{{ _free_mb }}"
+            logs_removed: "{{ _dc_logs.stdout_lines | default([]) | length }}"
+            temp_removed: "{{ _dc_tmp.stdout_lines | default([]) | length if not aap_ops_is_windows else _dc_win.stdout | default('') | trim }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Disk cleanup}

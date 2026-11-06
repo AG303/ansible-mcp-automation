@@ -1,0 +1,12 @@
+---
+argument_specs:
+  main:
+    short_description: Publish the standard aap_ops_result artifact and reports
+    options:
+      aap_ops_report_title: {type: str, description: "Report title"}
+      aap_ops_report_hosts: {type: list, elements: str, description: "Hosts whose aap_ops_host_result is collected (default ansible_play_hosts_all)"}
+      aap_ops_report_dir: {type: str, default: /tmp/aap_ops_reports, description: "Report output directory on the job's localhost"}
+      aap_ops_report_formats: {type: list, elements: str, default: [json, html], choices: [json, html], description: "Report formats"}
+      aap_ops_fail_on_status: {type: list, elements: str, default: [fail], description: "Host statuses that fail the job"}
+      aap_ops_stats_max_hosts: {type: int, default: 200, description: "Max hosts included in set_stats"}
+      aap_ops_stats_detail_chars: {type: int, default: 2000, description: "Max characters of details per host in set_stats"}

@@ -1,0 +1,32 @@
+---
+# SEC - Local account audit
+# Domain: Security Compliance. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Local users, UID 0 and administrator members, empty-password and never-expiring accounts, sudoers
+# entries and stale accounts. Returns aap_ops_result.
+# Survey variables: stale_days
+
+- name: SEC - Local account audit
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: SEC - Local account audit
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_security_audit/user_audit
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_security_audit
+        tasks_from: user_audit
+
+- name: Report - SEC - Local account audit
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SEC - Local account audit
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

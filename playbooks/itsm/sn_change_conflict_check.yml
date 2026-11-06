@@ -1,0 +1,25 @@
+---
+# SN - Change conflict check
+# Domain: ServiceNow Incident. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. For a proposed window and host list, lists other changes whose windows overlap on the same
+# configuration items and any blackout schedule overlaps. Returns aap_ops_result.
+# Survey variables: sn_planned_start, sn_planned_end, sn_affected_hosts
+
+- name: SN - Change conflict check
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Change conflict check
+  tasks:
+    - name: ServiceNow connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: Run sn_change/conflict_check
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_change
+        tasks_from: conflict_check
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

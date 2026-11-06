@@ -1,0 +1,19 @@
+---
+# CHANGING. firewalld / ufw / Windows Firewall enabled with an allow-list.
+- name: Host firewall baseline
+  block:
+    - name: Apply firewall
+      ansible.builtin.include_tasks: _firewall.yml
+      vars:
+        _hh_ports: "{{ (allowed_tcp_ports | default('22')).split(',') }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if _hh_fw_changed else 'ok' }}"
+          summary: "Firewall enabled; inbound TCP allowed: {{ _hh_allow | join(', ') }}{{ '' if _hh_fw_changed else ' - already compliant' }}"
+          details: {allowed_tcp: "{{ _hh_allow }}", pruned: "{{ host_hardening_firewall_prune }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Firewall baseline}

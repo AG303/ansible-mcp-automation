@@ -1,0 +1,31 @@
+---
+- name: Create problem
+  block:
+    - name: Validate input
+      ansible.builtin.assert:
+        that: sn_short_description | default('') | trim | length > 0
+        fail_msg: sn_short_description is required.
+        quiet: true
+
+    - name: Create and link
+      ansible.builtin.include_tasks: _create_and_link.yml
+      vars:
+        _p_short: "{{ sn_short_description | trim }}"
+        _p_desc: "{{ sn_description | default('') }}"
+        _p_impact: "{{ sn_impact | default('medium') }}"
+        _p_urgency: "{{ sn_urgency | default('medium') }}"
+        _p_incidents: "{{ (sn_incident_numbers | default('')).split(',') | map('trim') | map('upper') | select | list }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ _p_new.number }}"
+            status: changed
+            summary: >-
+              Problem {{ _p_new.number }} created; linked {{ _p_linked | length }} incident(s)
+              {%- if _p_already %} ({{ _p_already | join(', ') }} already linked to another problem){% endif %}
+            details: {problem: "{{ _p_new.number }}", linked: "{{ _p_linked }}", skipped: "{{ _p_already }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Create problem}

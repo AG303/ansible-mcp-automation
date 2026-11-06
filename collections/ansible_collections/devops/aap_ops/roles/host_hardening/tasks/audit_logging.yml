@@ -1,0 +1,64 @@
+---
+# CHANGING. auditd with baseline rules (Linux) or Advanced Audit Policy (Windows).
+- name: Audit logging configuration
+  block:
+    - name: Linux - auditd and rules
+      when: not aap_ops_is_windows
+      ansible.builtin.include_tasks: _audit_rules_linux.yml
+      vars:
+        host_hardening_audit_profile: "{{ compliance_profile | default('cis') }}"
+
+    - name: Linux - verify loaded rules
+      when: not aap_ops_is_windows and not (ansible_check_mode and _hh_pkg_audit is changed)
+      ansible.builtin.command: auditctl -l
+      register: _hh_loaded
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - force subcategory audit policy
+      when: aap_ops_is_windows
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        name: SCENoApplyLegacyAuditPolicy
+        data: 1
+        type: dword
+
+    - name: Windows - advanced audit policy
+      when: aap_ops_is_windows
+      ansible.windows.win_audit_policy_system:
+        subcategory: "{{ item.subcategory }}"
+        audit_type: "{{ item.audit_type }}"
+      loop: >-
+        {{ host_hardening_win_audit_subcategories
+           + (host_hardening_win_audit_stig_extra if compliance_profile | default('cis') == 'stig' else []) }}
+      loop_control:
+        label: "{{ item.subcategory }}"
+      register: _hh_auditpol
+
+    - name: Windows - security log size
+      when: aap_ops_is_windows
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Security'
+        name: MaxSize
+        data: "{{ 1024000 if compliance_profile | default('cis') == 'stig' else 196608 }}"
+        type: dword
+      register: _hh_logsize
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if _chg else 'ok' }}"
+          summary: >-
+            {{ (compliance_profile | default('cis')) | upper }} audit logging configured;
+            {{ (_hh_loaded.stdout_lines | default([]) | length ~ ' auditd rules loaded') if not aap_ops_is_windows else ((_hh_auditpol.results | default([]) | length) ~ ' audit subcategories set') }}
+          details:
+            rules_loaded: "{{ _hh_loaded.stdout_lines | default([]) | length }}"
+            subcategories: "{{ _hh_auditpol.results | default([]) | map(attribute='item.subcategory') | list }}"
+      vars:
+        _chg: >-
+          {{ (_hh_rules.changed | default(false)) or (_hh_auditconf.changed | default(false))
+             or (_hh_auditpol.changed | default(false)) or (_hh_logsize.changed | default(false)) }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Audit logging}

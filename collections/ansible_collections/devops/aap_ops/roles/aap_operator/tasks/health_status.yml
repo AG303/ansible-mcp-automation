@@ -1,0 +1,77 @@
+---
+- name: Platform health status
+  block:
+    - name: Get AAP CR
+      ansible.builtin.include_tasks: _get_cr.yml
+
+    - name: Get component CRs
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ aap_namespace }}"
+      loop: "{{ aap_operator_component_kinds }}"
+      loop_control: {label: "{{ item.kind }}"}
+      register: _components
+      failed_when: false
+
+    - name: Get pods
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ aap_namespace }}"
+      register: _pods
+
+    - name: Get PVCs
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        namespace: "{{ aap_namespace }}"
+      register: _pvcs
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_cr_row] + _comp_rows + _pod_rows + _pvc_rows }}"
+      vars:
+        _failure: "{{ _aap_cr_conditions | selectattr('type', 'equalto', 'Failure') | selectattr('status', 'equalto', 'True') | list }}"
+        _running: "{{ _aap_cr_conditions | selectattr('type', 'in', ['Running', 'Successful']) | selectattr('status', 'equalto', 'True') | list }}"
+        _cr_row:
+          host: "{{ aap_operator_kind }}/{{ aap_cr_name }}"
+          status: "{{ 'fail' if _failure else ('ok' if _running else 'warn') }}"
+          summary: >-
+            conditions: {{ _aap_cr_conditions | map(attribute='type') | zip(_aap_cr_conditions | map(attribute='status')) | map('join', '=') | join(', ') or 'none' }};
+            gateway URL {{ _aap_cr.status.URL | default('n/a') }}; version {{ _aap_cr.status.deployedVersion | default(_aap_cr.status.version | default('?')) }}
+          details: {conditions: "{{ _aap_cr_conditions }}", failure_message: "{{ (_failure | first).message | default('') }}"}
+        _comp_rows: >-
+          {%- set out = [] -%}
+          {%- for r in _components.results -%}
+          {%-   for c in r.resources | default([]) -%}
+          {%-     set conds = c.status.conditions | default([]) -%}
+          {%-     set bad = conds | selectattr('type', 'equalto', 'Failure') | selectattr('status', 'equalto', 'True') | list -%}
+          {%-     set ok = conds | selectattr('type', 'in', ['Running', 'Successful']) | selectattr('status', 'equalto', 'True') | list -%}
+          {%-     set _ = out.append({'host': r.item.kind ~ '/' ~ c.metadata.name, 'status': 'fail' if bad else ('ok' if ok else 'warn'),
+                   'summary': (bad | first).message | default('') | truncate(200) if bad else ('reconciled' if ok else 'not yet reconciled'),
+                   'details': {'version': c.status.version | default('')}}) -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ out }}
+        _pod_rows: >-
+          {%- set out = [] -%}
+          {%- for p in _pods.resources -%}
+          {%-   set phase = p.status.phase | default('Unknown') -%}
+          {%-   set cs = p.status.containerStatuses | default([]) -%}
+          {%-   set restarts = cs | map(attribute='restartCount') | sum -%}
+          {%-   set notready = cs | rejectattr('ready') | list | length -%}
+          {%-   set waiting = cs | selectattr('state.waiting', 'defined') | map(attribute='state.waiting.reason') | list -%}
+          {%-   if phase not in ['Running', 'Succeeded'] or (phase == 'Running' and notready > 0) or restarts > 5 or waiting -%}
+          {%-     set _ = out.append({'host': 'pod/' ~ p.metadata.name, 'status': 'fail' if (phase in ['Failed', 'Pending'] or waiting) else 'warn',
+                   'summary': phase ~ ', ' ~ notready ~ ' container(s) not ready, ' ~ restarts ~ ' restart(s)' ~ ((', ' ~ waiting | join(',')) if waiting else ''),
+                   'details': {'node': p.spec.nodeName | default('')}}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        _pvc_rows: >-
+          {{ _pvcs.resources | rejectattr('status.phase', 'equalto', 'Bound')
+             | map(attribute='metadata.name') | map('regex_replace', '^', 'pvc/')
+             | map('community.general.dict_kv', 'host') | map('combine', {'status': 'fail', 'summary': 'PVC not Bound', 'details': {}}) | list }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Platform health}

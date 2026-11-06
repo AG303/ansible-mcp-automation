@@ -1,0 +1,50 @@
+---
+- name: Relaunch a failed job
+  block:
+    - name: Require a job ID
+      ansible.builtin.assert:
+        that: (job_id | default('') | string | trim) is match('^[0-9]+$')
+        fail_msg: job_id must be the numeric ID of a failed job.
+        quiet: true
+
+    - name: Get source job
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/jobs/{{ job_id | int }}/"
+
+    - name: Validate source job
+      ansible.builtin.assert:
+        that:
+          - aap_api_response.json.status in ['failed', 'error', 'canceled']
+          - aap_api_response.json.name is not search(aap_jobs_protected_name_regex)
+        fail_msg: >-
+          Job {{ job_id }} ({{ aap_api_response.json.name }}) is {{ aap_api_response.json.status }}; only failed/error/canceled
+          jobs of non-protected templates can be relaunched.
+        quiet: true
+
+    - name: Relaunch
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/jobs/{{ job_id | int }}/relaunch/"
+        aap_api_method: POST
+        aap_api_body: "{{ {'hosts': 'failed'} if failed_hosts_only | default(true) | bool else {'hosts': 'all'} }}"
+        aap_api_status: [201]
+
+    - name: Wait for relaunched job
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: wait_job}
+      vars:
+        aap_api_job_path: "{{ aap_api_c }}/jobs/{{ aap_api_response.json.id }}/"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ aap_api_job.name }} #{{ aap_api_job.id }}"
+            status: "{{ 'changed' if aap_api_job.status == 'successful' else 'fail' }}"
+            summary: >-
+              Relaunch of job {{ job_id }} ({{ 'failed hosts only' if failed_hosts_only | default(true) | bool else 'all hosts' }})
+              finished {{ aap_api_job.status }} in {{ aap_api_job.elapsed | round(1) }}s as job {{ aap_api_job.id }}
+            details: {source_job_id: "{{ job_id | int }}", new_job_id: "{{ aap_api_job.id }}", status: "{{ aap_api_job.status }}", limit: "{{ aap_api_job.limit }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Relaunch failed job}

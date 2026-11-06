@@ -1,0 +1,98 @@
+---
+- name: Pre-patch readiness
+  block:
+    - name: Free space on system volume
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_monitor
+        tasks_from: _free_space.yml
+
+    - name: RHEL - repository reachability
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.command: dnf -q makecache --refresh
+      register: _pc_repo_rhel
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: RHEL - package manager lock
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.command: pgrep -x 'dnf|yum|rpm|packagekitd'
+      register: _pc_lock_rhel
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Ubuntu - repository reachability
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.command: apt-get update -q
+      register: _pc_repo_ubuntu
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Ubuntu - dpkg lock
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.shell: fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null; pgrep -x 'apt|apt-get|dpkg|unattended-upgr' || true
+      register: _pc_lock_ubuntu
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - update service and source reachability
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $wu = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' -ErrorAction SilentlyContinue
+        $src = if ($wu.WUServer) { $wu.WUServer } else { 'https://download.windowsupdate.com' }
+        $u = [uri]$src
+        $port = if ($u.Port -gt 0) { $u.Port } else { 443 }
+        $ok = (Test-NetConnection -ComputerName $u.Host -Port $port -WarningAction SilentlyContinue).TcpTestSucceeded
+        $svc = (Get-Service wuauserv).StartType
+        $busy = [bool](Get-Process -Name TiWorker, TrustedInstaller -ErrorAction SilentlyContinue | Where-Object { $_.CPU -gt 0 })
+        @{ source = $src; reachable = [bool]$ok; wuauserv_start = "$svc"; installer_busy = $busy } | ConvertTo-Json -Compress
+      register: _pc_win
+      changed_when: false
+      check_mode: false
+
+    - name: Critical services
+      ansible.builtin.include_tasks: _services.yml
+      vars:
+        _svc_list: "{{ (critical_services | default('')).split(',') | map('trim') | select | list }}"
+
+    - name: Pending reboot
+      ansible.builtin.include_tasks: reboot_required.yml
+
+    - name: Evaluate readiness
+      ansible.builtin.set_fact:
+        _pc_checks:
+          free_mb: "{{ _free_mb | int }}"
+          free_space_ok: "{{ _free_mb | int >= min_free_mb | default(2048) | int }}"
+          source_reachable: >-
+            {{ (_pc_win.stdout | from_json).reachable if aap_ops_is_windows
+               else ((_pc_repo_rhel.rc | default(0)) == 0 if aap_ops_os == 'rhel'
+               else ((_pc_repo_ubuntu.rc | default(0)) == 0 and 'Err:' not in _pc_repo_ubuntu.stdout | default(''))) }}
+          package_manager_idle: >-
+            {{ not (_pc_win.stdout | from_json).installer_busy if aap_ops_is_windows
+               else ((_pc_lock_rhel.stdout | default('') | trim | length == 0) if aap_ops_os == 'rhel'
+               else (_pc_lock_ubuntu.stdout | default('') | trim | length == 0)) }}
+          pending_reboot: "{{ _rr.required }}"
+          critical_services_down: "{{ _svc_down }}"
+          update_source: "{{ (_pc_win.stdout | from_json).source if aap_ops_is_windows else 'os repositories' }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if (not _pc_checks.free_space_ok or not _pc_checks.source_reachable or not _pc_checks.package_manager_idle)
+               else ('warn' if (_pc_checks.pending_reboot or _pc_checks.critical_services_down | length > 0) else 'ok') }}
+          summary: >-
+            {%- set p = [] -%}
+            {%- if not _pc_checks.free_space_ok -%}{%- set _ = p.append('only ' ~ _pc_checks.free_mb ~ ' MB free') -%}{%- endif -%}
+            {%- if not _pc_checks.source_reachable -%}{%- set _ = p.append('update source unreachable') -%}{%- endif -%}
+            {%- if not _pc_checks.package_manager_idle -%}{%- set _ = p.append('package manager busy/locked') -%}{%- endif -%}
+            {%- if _pc_checks.pending_reboot -%}{%- set _ = p.append('reboot already pending') -%}{%- endif -%}
+            {%- if _pc_checks.critical_services_down -%}{%- set _ = p.append('services down: ' ~ _pc_checks.critical_services_down | join(',')) -%}{%- endif -%}
+            {{ 'Ready to patch' if not p else p | join('; ') }}
+          details: "{{ _pc_checks }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Pre-patch check}

@@ -1,0 +1,44 @@
+---
+# Runs on each target host: health, disk, services (optional) and recent errors,
+# merged into one aap_ops_host_result.
+- name: Health check
+  ansible.builtin.include_role: {name: devops.aap_ops.host_monitor, tasks_from: health_check}
+
+- name: Keep health result
+  ansible.builtin.set_fact:
+    _diag: "{{ {'health': aap_ops_host_result} }}"
+
+- name: Disk usage
+  ansible.builtin.include_role: {name: devops.aap_ops.host_monitor, tasks_from: disk_usage}
+
+- name: Keep disk result
+  ansible.builtin.set_fact:
+    _diag: "{{ _diag | combine({'disk': aap_ops_host_result}) }}"
+
+- name: Service status
+  when: service_names | default('') | trim | length > 0
+  block:
+    - name: Check services
+      ansible.builtin.include_role: {name: devops.aap_ops.host_monitor, tasks_from: service_status}
+    - name: Keep service result
+      ansible.builtin.set_fact:
+        _diag: "{{ _diag | combine({'services': aap_ops_host_result}) }}"
+
+- name: Recent errors
+  ansible.builtin.include_role: {name: devops.aap_ops.host_monitor, tasks_from: log_errors}
+
+- name: Merge diagnostics
+  ansible.builtin.set_fact:
+    _diag: "{{ _diag | combine({'logs': aap_ops_host_result}) }}"
+
+- name: Record result
+  ansible.builtin.set_fact:
+    aap_ops_host_result:
+      status: >-
+        {{ 'fail' if _st is search('fail') else ('warn' if _st is search('warn') else 'ok') }}
+      summary: >-
+        {{ _diag | dict2items | map(attribute='key') | zip(_diag | dict2items | map(attribute='value.status'), _diag | dict2items | map(attribute='value.summary'))
+           | map('join', ': ') | join(' | ') | truncate(900) }}
+      details: "{{ _diag | dict2items | items2dict(key_name='key', value_name='value') }}"
+  vars:
+    _st: "{{ _diag | dict2items | map(attribute='value.status') | join(',') }}"

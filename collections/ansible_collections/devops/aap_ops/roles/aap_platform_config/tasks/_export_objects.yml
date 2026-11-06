@@ -1,0 +1,14 @@
+---
+- name: "Get {{ _obj_type }}"
+  ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+  vars:
+    aap_api_path: "{{ aap_api_c }}/{{ _obj_type }}/"
+    aap_api_query: {order_by: name}
+
+- name: "Record {{ _obj_type }} (id, name, organization, modified - no secrets)"
+  ansible.builtin.set_fact:
+    _objects: >-
+      {%- set keep = ['id', 'name', 'modified', 'organization', 'description', 'type'] -%}
+      {%- set rows = [] -%}
+      {%- for o in aap_api_results -%}{%- set _ = rows.append(o | dict2items | selectattr('key', 'in', keep) | items2dict) -%}{%- endfor -%}
+      {{ _objects | default({}) | combine({_obj_type: rows}) }}

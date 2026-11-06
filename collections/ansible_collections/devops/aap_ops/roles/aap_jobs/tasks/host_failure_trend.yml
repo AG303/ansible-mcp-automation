@@ -1,0 +1,37 @@
+---
+- name: Host failure trend
+  block:
+    - name: Get failed/unreachable host summaries
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/job_host_summaries/"
+        aap_api_query:
+          or__failed: "true"
+          or__dark__gt: 0
+          created__gt: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(now().timestamp() - (days | default(7) | int) * 86400, utc=true) }}"
+          order_by: -created
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows[:top_n | default(10) | int] }}"  # noqa: jinja[invalid]
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for g in aap_api_results | groupby('host_name') -%}
+          {%-   set unreach = g[1] | selectattr('dark', 'gt', 0) | list | length -%}
+          {%-   set tpls = g[1] | map(attribute='summary_fields.job.name', default='?') | unique | list -%}
+          {%-   set _ = out.append({'host': g[0], 'status': 'fail' if g[1] | length >= 3 else 'warn',
+                 'summary': (g[1] | length) ~ ' failing job run(s) (' ~ unreach ~ ' unreachable) across ' ~ tpls | length ~ ' template(s): ' ~ tpls[:5] | join(', '),
+                 'details': {'count': g[1] | length, 'unreachable': unreach, 'templates': tpls,
+                             'job_ids': g[1] | map(attribute='job', default=0) | unique | list}}) -%}
+          {%- endfor -%}
+          {{ out | sort(attribute='details.count', reverse=true) }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _rows | length > 0 else 'ok' }}"
+          summary: "{{ _rows | length }} host(s) failed at least once in {{ days | default(7) }} day(s); top {{ top_n | default(10) }} shown"
+          details: {total_failed_host_runs: "{{ aap_api_results | length }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Host failure trend}

@@ -1,0 +1,75 @@
+---
+# First node of every "WF - <name>" workflow. Read-only. Fails (stopping the
+# workflow before its approval node) unless the change is approved, in an
+# allowed state and inside its planned window, and covers the workflow's hosts.
+- name: Change gate
+  block:
+    - name: Require a change number
+      ansible.builtin.assert:
+        that: sn_change_number | default('') | trim | upper is match('^CHG[0-9]+$')
+        fail_msg: sn_change_number (CHG...) is required to run a changing workflow.
+        quiet: true
+
+    - name: Load change
+      ansible.builtin.include_tasks: _load_change.yml
+
+    - name: Read calling workflow (limit and name)
+      when: tower_workflow_job_id | default(awx_workflow_job_id | default('')) | string | length > 0
+      block:
+        - name: Get workflow job
+          ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+          vars:
+            aap_api_path: "{{ aap_api_c }}/workflow_jobs/{{ tower_workflow_job_id | default(awx_workflow_job_id) }}/"
+        - name: Keep workflow
+          ansible.builtin.set_fact:
+            _wf: "{{ aap_api_response.json }}"
+
+    - name: Evaluate gate checks
+      ansible.builtin.set_fact:
+        _checks: >-
+          {%- set now_e = now().timestamp() -%}
+          {%- set grace = (sn_change_gate_grace_minutes | int) * 60 -%}
+          {%- set allowed = sn_change_gate_states | map('extract', sn_change_state_map) | list -%}
+          {%- set c = [] -%}
+          {%- set _ = c.append({'check': 'approved', 'ok': _chg.approval == 'approved', 'value': _chg_disp.approval}) -%}
+          {%- set _ = c.append({'check': 'state ' ~ sn_change_gate_states | join('/'), 'ok': _chg.state | string in allowed, 'value': _chg_disp.state}) -%}
+          {%- set _ = c.append({'check': 'not on hold', 'ok': not (_chg.on_hold | default(false) | bool), 'value': _chg.on_hold | default('false')}) -%}
+          {%- set _ = c.append({'check': 'inside planned window (UTC)', 'ok': (_chg_start | float - grace) <= now_e <= (_chg_end | float) and (_chg_end | float) > 0,
+                                'value': (_chg.start_date or 'unset') ~ ' - ' ~ (_chg.end_date or 'unset') ~ ', now ' ~ now(utc=true).strftime('%Y-%m-%d %H:%M:%S')}) -%}
+          {%- if _wf is defined -%}
+          {%-   set corr = _chg.correlation_id | default('') -%}
+          {%-   set want = sn_correlation_prefix ~ ':change:' -%}
+          {%-   if sn_change_gate_require_template_match | bool and corr.startswith(want) -%}
+          {%-     set tpl = corr[want | length:] -%}
+          {%-     set _ = c.append({'check': 'change covers this workflow', 'ok': tpl in [_wf.name, _wf.name | regex_replace('^WF - ', '')],
+                                    'value': 'change for ' ~ tpl ~ ', workflow ' ~ _wf.name}) -%}
+          {%-   endif -%}
+          {%-   set lim = (_wf.limit | default('')).split(',') | map('trim') | select | list -%}
+          {%-   if sn_change_gate_require_ci_coverage | bool and _chg_cis | length > 0 -%}
+          {%-     set cis = _chg_cis | map('lower') | map('regex_replace', '\\..*$', '') | list -%}
+          {%-     set unc = [] -%}
+          {%-     for h in lim if (h | lower | regex_replace('\\..*$', '')) not in cis -%}{%- set _ = unc.append(h) -%}{%- endfor -%}
+          {%-     set _ = c.append({'check': 'workflow limit covered by change CIs', 'ok': lim | length > 0 and unc | length == 0,
+                                    'value': ('limit empty - whole inventory is not covered by a CI list' if not lim else ('not on change: ' ~ unc | join(', ') if unc else lim | length ~ ' host(s) covered'))}) -%}
+          {%-   endif -%}
+          {%- endif -%}
+          {{ c }}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: >-
+          {%- set bad = _checks | rejectattr('ok') | list -%}
+          {%- set out = [{'host': _chg.number, 'status': 'fail' if bad else 'ok',
+               'summary': ('GATE CLOSED - ' ~ bad | map(attribute='check') | join('; ')) if bad else ('GATE OPEN - ' ~ _chg.number ~ ' approved and in window: ' ~ _chg.short_description | truncate(100)),
+               'details': {'change': _chg.number, 'cis': _chg_cis, 'workflow_job': _wf.id | default('')}}] -%}
+          {%- for c in _checks -%}
+          {%-   set _ = out.append({'host': _chg.number ~ ' / ' ~ c.check, 'status': 'ok' if c.ok else 'fail', 'summary': c.value | string, 'details': {}}) -%}
+          {%- endfor -%}
+          {%- if _chg_cis | length == 0 -%}
+          {%-   set _ = out.append({'host': _chg.number ~ ' / CIs', 'status': 'warn', 'summary': 'change lists no CIs; host coverage not enforced', 'details': {}}) -%}
+          {%- endif -%}
+          {{ out }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Change gate}

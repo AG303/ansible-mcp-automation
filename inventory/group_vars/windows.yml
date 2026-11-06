@@ -1,0 +1,12 @@
+---
+ansible_connection: winrm
+ansible_winrm_transport: ntlm
+ansible_winrm_server_cert_validation: "{{ aap_ops_winrm_cert_validation | default('validate') }}"
+ansible_port: 5986
+# The "AAP Ops - Windows (WinRM)" credential injects these environment variables so the
+# Linux machine credential and the Windows account can be attached to the same template.
+ansible_user: "{{ lookup('ansible.builtin.env', 'AAP_OPS_WIN_USERNAME') }}"
+ansible_password: "{{ lookup('ansible.builtin.env', 'AAP_OPS_WIN_PASSWORD') }}"
+# Playbooks set "become: true" for Linux; connection variables override play
+# keywords, so Windows hosts never attempt sudo.
+ansible_become: false

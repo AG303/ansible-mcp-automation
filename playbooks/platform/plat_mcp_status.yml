@@ -1,0 +1,21 @@
+---
+# PLAT - MCP server status
+# Domain: Platform Configuration. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. MCP server pod, route and readiness on OpenShift plus an HTTP check of the MCP endpoint. Returns
+# aap_ops_result.
+# Survey variables: aap_namespace, aap_cr_name
+
+- name: PLAT - MCP server status
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PLAT - MCP server status
+  tasks:
+    - name: Run aap_operator/mcp_status
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_operator
+        tasks_from: mcp_status
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

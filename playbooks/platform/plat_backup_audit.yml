@@ -1,0 +1,21 @@
+---
+# PLAT - Backup audit
+# Domain: Platform Configuration. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Existing platform backup custom resources, their status and age; flags when the newest successful
+# backup is older than N days. Returns aap_ops_result.
+# Survey variables: aap_namespace, max_age_days
+
+- name: PLAT - Backup audit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PLAT - Backup audit
+  tasks:
+    - name: Run aap_operator/backup_audit
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_operator
+        tasks_from: backup_audit
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

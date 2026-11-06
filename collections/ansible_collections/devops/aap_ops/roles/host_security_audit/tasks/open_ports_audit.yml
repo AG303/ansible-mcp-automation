@@ -1,0 +1,54 @@
+---
+- name: Listening ports audit
+  block:
+    - name: Linux - listening sockets with process
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        ss -Hlntup 2>/dev/null | awk '{ proto=$1; split($5,a,":"); port=a[length(a)]; addr=substr($5,1,length($5)-length(port)-1);
+          proc=$7; gsub(/users:\(\("/,"",proc); gsub(/".*/,"",proc); print proto"|"port"|"addr"|"proc }' | sort -u
+      args:
+        executable: /bin/bash
+      register: _op_linux
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - listening sockets with process
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $p = @{}; Get-Process | ForEach-Object { $p[$_.Id] = $_.ProcessName }
+        $t = Get-NetTCPConnection -State Listen | ForEach-Object { "tcp|$($_.LocalPort)|$($_.LocalAddress)|$($p[[int]$_.OwningProcess])" }
+        $u = Get-NetUDPEndpoint | ForEach-Object { "udp|$($_.LocalPort)|$($_.LocalAddress)|$($p[[int]$_.OwningProcess])" }
+        ConvertTo-Json -InputObject @(($t + $u) | Sort-Object -Unique) -Compress
+      register: _op_win
+      changed_when: false
+      check_mode: false
+
+    - name: Build port table
+      ansible.builtin.set_fact:
+        _op: >-
+          {%- set out = [] -%}
+          {%- for l in ((_op_win.stdout | from_json) if aap_ops_is_windows else _op_linux.stdout_lines) if l.count('|') == 3 -%}
+          {%-   set f = l.split('|') -%}
+          {%-   set loop_only = f[2] in ['127.0.0.1', '::1', '[::1]', '127.0.0.53%lo', '127.0.0.54'] or f[2].startswith('127.') -%}
+          {%-   set _ = out.append({'proto': f[0], 'port': f[1] | int, 'address': f[2], 'process': f[3],
+                                   'loopback_only': loop_only, 'allowed': (f[1] in _allowed) or loop_only}) -%}
+          {%- endfor -%}
+          {{ out }}
+      vars:
+        _allowed: "{{ (allowed_ports | default('22,123')).split(',') | map('trim') | select | list }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'warn' if _unexpected | length > 0 else 'ok' }}"
+          summary: >-
+            {{ _op | rejectattr('loopback_only') | list | length }} externally listening sockets;
+            {{ _unexpected | length }} not on allow-list{{ (': ' ~ (_unexpected | map(attribute='port') | unique | map('string') | join(', '))) if _unexpected else '' }}
+          details: {unexpected: "{{ _unexpected }}", all: "{{ _op }}"}
+      vars:
+        _unexpected: "{{ _op | rejectattr('allowed') | list }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Open ports audit}

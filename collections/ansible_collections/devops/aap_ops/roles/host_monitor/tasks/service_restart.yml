@@ -1,0 +1,67 @@
+---
+# CHANGING. Restart one service, wait for it to run, optionally verify a TCP port.
+- name: Restart service with validation
+  block:
+    - name: Require a service name
+      ansible.builtin.assert:
+        that: service_name | default('') | trim | length > 0
+        fail_msg: service_name is required.
+        quiet: true
+
+    - name: Linux - restart service
+      when: not aap_ops_is_windows
+      ansible.builtin.systemd_service:
+        name: "{{ service_name | trim }}"
+        state: restarted
+      register: _sr_restart
+
+    - name: Linux - wait for active state
+      when: not aap_ops_is_windows and not ansible_check_mode
+      ansible.builtin.command: systemctl is-active {{ service_name | trim | quote }}
+      register: _sr_state
+      changed_when: false
+      check_mode: false
+      retries: "{{ (host_monitor_service_wait_sec / 5) | int }}"
+      delay: 5
+      until: _sr_state.stdout | trim == 'active'
+
+    - name: Windows - restart service
+      when: aap_ops_is_windows
+      ansible.windows.win_service:
+        name: "{{ service_name | trim }}"
+        state: restarted
+      register: _sr_restart_win
+
+    - name: Windows - wait for running state
+      when: aap_ops_is_windows
+      ansible.windows.win_service_info:
+        name: "{{ service_name | trim }}"
+      register: _sr_state_win
+      retries: "{{ (host_monitor_service_wait_sec / 5) | int }}"
+      delay: 5
+      until: (_sr_state_win.services | first).state == 'started'
+
+    - name: Linux - verify TCP port
+      when: not aap_ops_is_windows and verify_port | default(0) | int > 0
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ verify_port | int }}"
+        timeout: "{{ host_monitor_service_wait_sec }}"
+
+    - name: Windows - verify TCP port
+      when: aap_ops_is_windows and verify_port | default(0) | int > 0
+      ansible.windows.win_wait_for:
+        host: 127.0.0.1
+        port: "{{ verify_port | int }}"
+        timeout: "{{ host_monitor_service_wait_sec }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: changed
+          summary: "{{ service_name }} restarted and running{{ (', port ' ~ verify_port ~ ' listening') if verify_port | default(0) | int > 0 else '' }}"
+          details: {service: "{{ service_name }}", port: "{{ verify_port | default(0) }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Service restart}

@@ -1,0 +1,67 @@
+---
+- name: Patch compliance report
+  block:
+    - name: List pending updates
+      ansible.builtin.include_tasks: _list_updates.yml
+      vars:
+        _sec_only: false
+
+    - name: Reboot state
+      ansible.builtin.include_tasks: reboot_required.yml
+
+    - name: RHEL - last package install/update time
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.shell: |
+        set -o pipefail
+        rpm -qa --qf '%{INSTALLTIME}\n' | sort -n | tail -1
+      args:
+        executable: /bin/bash
+      register: _cr_last_rhel
+      changed_when: false
+      check_mode: false
+
+    - name: Ubuntu - last upgrade time
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.shell: |
+        set -o pipefail
+        l=$(zgrep -h ' upgrade ' /var/log/dpkg.log* 2>/dev/null | sort | tail -1 | awk '{print $1" "$2}')
+        [ -n "$l" ] && date -d "$l" +%s || stat -c %Y /var/lib/dpkg/status
+      args:
+        executable: /bin/bash
+      register: _cr_last_ubuntu
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - last hotfix install time
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $h = Get-HotFix | Where-Object { $_.InstalledOn } | Sort-Object InstalledOn | Select-Object -Last 1
+        if ($h) { [int64](([DateTimeOffset]$h.InstalledOn).ToUnixTimeSeconds()) } else { 0 }
+      register: _cr_last_win
+      changed_when: false
+      check_mode: false
+
+    - name: Score
+      vars:
+        _cr_last: "{{ _cr_last_win if aap_ops_is_windows else (_cr_last_rhel if aap_ops_os == 'rhel' else _cr_last_ubuntu) }}"
+      ansible.builtin.set_fact:
+        _cr:
+          days_since_patch: "{{ ((ansible_date_time.epoch | int - _cr_last.stdout | trim | int) / 86400) | int }}"
+          pending_updates: "{{ _updates | length }}"
+          pending_security: "{{ _updates | selectattr('security') | list | length }}"
+          reboot_pending: "{{ _rr.required }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if (_cr.days_since_patch | int > max_days_since_patch | default(35) | int and _cr.pending_security | int > 0)
+               else ('warn' if (_cr.days_since_patch | int > max_days_since_patch | default(35) | int or _cr.pending_security | int > 0 or _cr.reboot_pending) else 'ok') }}
+          summary: >-
+            risk={{ (_cr.pending_security | int * 3) + (_cr.pending_updates | int) + ([_cr.days_since_patch | int - max_days_since_patch | default(35) | int, 0] | max) + (10 if _cr.reboot_pending else 0) }};
+            {{ _cr.days_since_patch }} days since last patch, {{ _cr.pending_updates }} pending ({{ _cr.pending_security }} security){{ ', reboot pending' if _cr.reboot_pending else '' }}
+          details: "{{ _cr | combine({'risk_score': (_cr.pending_security | int * 3) + (_cr.pending_updates | int) + ([_cr.days_since_patch | int - max_days_since_patch | default(35) | int, 0] | max) + (10 if _cr.reboot_pending else 0)}) }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Patch compliance report}

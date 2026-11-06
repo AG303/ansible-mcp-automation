@@ -1,0 +1,11 @@
+---
+- name: "Read artifacts of {{ _node.name }}"
+  ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+  vars:
+    aap_api_path: "{{ aap_api_c }}/jobs/{{ _node.id }}/"
+
+- name: Flag warnings
+  ansible.builtin.set_fact:
+    _node_warn: >-
+      {{ _node_warn | default(false) | bool
+         or (aap_api_response.json.artifacts.aap_ops_result.overall | default('ok')) in ['warn', 'fail'] }}

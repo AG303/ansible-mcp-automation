@@ -1,0 +1,12 @@
+---
+# Survey variables (see catalog.yml) are referenced with inline defaults; these
+# role defaults cover values that are not surveyed.
+host_monitor_fs_exclude: [tmpfs, devtmpfs, overlay, squashfs, iso9660, nfs, nfs4, cifs, autofs, proc, sysfs]
+host_monitor_win_log_names: [System, Application]
+host_monitor_cleanup_paths_linux: [/tmp, /var/tmp]
+host_monitor_cleanup_paths_windows: ['C:\Windows\Temp']
+host_monitor_service_wait_sec: 60
+host_monitor_service_aliases:
+  ubuntu: {sshd: ssh, chronyd: chrony, crond: cron, rsyslogd: rsyslog}
+  rhel: {ssh: sshd, chrony: chronyd, cron: crond}
+  windows: {chronyd: W32Time, chrony: W32Time, ntp: W32Time}

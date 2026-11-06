@@ -1,0 +1,14 @@
+---
+- name: Reload sshd
+  ansible.builtin.service:
+    name: "{{ 'ssh' if aap_ops_os == 'ubuntu' else 'sshd' }}"
+    state: reloaded
+  listen: host_hardening reload sshd
+
+- name: Load audit rules
+  ansible.builtin.command: augenrules --load
+  register: _hh_augen
+  changed_when: true
+  # With STIG "-e 2" the ruleset is immutable until reboot; report, do not fail.
+  failed_when: _hh_augen.rc != 0 and 'immutable' not in (_hh_augen.stdout ~ _hh_augen.stderr)
+  listen: host_hardening load audit rules

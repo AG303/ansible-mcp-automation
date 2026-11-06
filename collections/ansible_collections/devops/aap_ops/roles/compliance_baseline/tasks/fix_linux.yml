@@ -1,0 +1,158 @@
+---
+# One remediation for control _ctl (loop var). Dispatches on _ctl.fix.type.
+- name: "{{ _ctl.id }} - sshd setting"
+  when: _ctl.fix.type == 'sshd'
+  block:
+    - name: "{{ _ctl.id }} - detect sshd_config.d include"
+      ansible.builtin.command: grep -Eq '^\s*Include\s+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config
+      register: _cb_inc
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: "{{ _ctl.id }} - set {{ _ctl.fix.key }} in drop-in"
+      when: _cb_inc.rc == 0
+      ansible.builtin.lineinfile:
+        path: "{{ compliance_baseline_sshd_dropin }}"
+        regexp: '^\s*{{ _ctl.fix.key }}\s'
+        line: "{{ _ctl.fix.key }} {{ _ctl.fix.value }}"
+        create: true
+        mode: "0600"
+      register: _cb_sshd_drop
+
+    - name: "{{ _ctl.id }} - set {{ _ctl.fix.key }} in sshd_config"
+      when: _cb_inc.rc != 0
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^\s*#?\s*{{ _ctl.fix.key }}\s'
+        line: "{{ _ctl.fix.key }} {{ _ctl.fix.value }}"
+        insertbefore: '^\s*Match\s'
+        validate: /usr/sbin/sshd -t -f %s
+        mode: "0600"
+      register: _cb_sshd_main
+
+    - name: "{{ _ctl.id }} - validate full sshd configuration"
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+      check_mode: false
+      notify: compliance_baseline reload sshd
+  rescue:
+    - name: "{{ _ctl.id }} - roll back drop-in line after failed validation"
+      when: _cb_inc.rc | default(1) == 0
+      ansible.builtin.lineinfile:
+        path: "{{ compliance_baseline_sshd_dropin }}"
+        regexp: '^\s*{{ _ctl.fix.key }}\s'
+        state: absent
+    - name: "{{ _ctl.id }} - report sshd validation failure"
+      ansible.builtin.fail:
+        msg: "sshd -t failed after setting {{ _ctl.fix.key }}; change rolled back"
+
+- name: "{{ _ctl.id }} - sysctl"
+  when: _ctl.fix.type == 'sysctl'
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "{{ _ctl.fix.value }}"
+    sysctl_file: "{{ compliance_baseline_sysctl_file }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ _ctl.fix.name.split(',') }}"
+
+- name: "{{ _ctl.id }} - ensure supporting package"
+  when: _ctl.fix.type == 'lineinfile' and _ctl.fix.package is defined
+  ansible.builtin.package:
+    name: "{{ _ctl.fix.package }}"
+    state: present
+  register: _cb_pkg
+
+- name: "{{ _ctl.id }} - line in {{ _ctl.fix.path | default('') }}"
+  when: _ctl.fix.type == 'lineinfile'
+  ansible.builtin.lineinfile:
+    path: "{{ _ctl.fix.path }}"
+    regexp: "{{ _ctl.fix.regexp }}"
+    line: "{{ _ctl.fix.line }}"
+    create: "{{ _ctl.fix.create | default(false) }}"
+    mode: "{{ '0644' if _ctl.fix.create | default(false) else omit }}"
+  # In check mode the package is not really installed, so its config file may not exist yet.
+  ignore_errors: "{{ ansible_check_mode and (_cb_pkg is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+
+- name: "{{ _ctl.id }} - packages present"
+  when: _ctl.fix.type == 'package_present'
+  ansible.builtin.package:
+    name: "{{ _ctl.fix.packages }}"
+    state: present
+
+- name: "{{ _ctl.id }} - service enabled"
+  when: _ctl.fix.type == 'package_present' and _ctl.fix.service is defined
+  ansible.builtin.service:
+    name: "{{ _ctl.fix.service }}"
+    state: started
+    enabled: true
+  ignore_errors: "{{ ansible_check_mode }}"  # noqa: ignore-errors  check mode only: package not installed yet
+
+- name: "{{ _ctl.id }} - packages absent"
+  when: _ctl.fix.type == 'package_absent'
+  ansible.builtin.package:
+    name: "{{ _ctl.fix.packages }}"
+    state: absent
+
+- name: "{{ _ctl.id }} - disable kernel modules"
+  when: _ctl.fix.type == 'modprobe'
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/aap-ops-baseline.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible (devops.aap_ops.compliance_baseline)
+      {% for m in _ctl.fix.modules %}
+      install {{ m }} /bin/false
+      blacklist {{ m }}
+      {% endfor %}
+
+- name: "{{ _ctl.id }} - file ownership and mode"
+  when: _ctl.fix.type == 'file_mode'
+  ansible.builtin.file:
+    path: "{{ _ctl.fix.path }}"
+    mode: "{{ _ctl.fix.mode }}"
+    owner: "{{ _ctl.fix.owner }}"
+    group: "{{ _ctl.fix.group }}"
+
+- name: "{{ _ctl.id }} - baseline audit rules"
+  when: _ctl.fix.type == 'audit_rules'
+  ansible.builtin.include_role:
+    name: devops.aap_ops.host_hardening
+    tasks_from: _audit_rules_linux.yml
+  vars:
+    host_hardening_audit_profile: "{{ _profile }}"
+
+- name: "{{ _ctl.id }} - SELinux enforcing"
+  when: _ctl.fix.type == 'selinux'
+  ansible.posix.selinux:
+    state: enforcing
+    policy: targeted
+  register: _cb_selinux
+
+- name: "{{ _ctl.id }} - AppArmor enabled"
+  when: _ctl.fix.type == 'apparmor'
+  block:
+    - name: "{{ _ctl.id }} - install AppArmor"
+      ansible.builtin.apt:
+        name: [apparmor, apparmor-utils]
+        state: present
+    - name: "{{ _ctl.id }} - enable AppArmor"
+      ansible.builtin.service:
+        name: apparmor
+        state: started
+        enabled: true
+
+- name: "{{ _ctl.id }} - host firewall"
+  when: _ctl.fix.type == 'firewall'
+  ansible.builtin.include_role:
+    name: devops.aap_ops.host_hardening
+    tasks_from: _firewall.yml
+
+- name: "{{ _ctl.id }} - command"
+  when: _ctl.fix.type == 'command'
+  ansible.builtin.shell: "{{ _ctl.fix.cmd }}"
+  args:
+    executable: /bin/bash
+  changed_when: true

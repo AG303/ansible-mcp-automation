@@ -1,0 +1,16 @@
+---
+- name: Validate and reload sshd
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  notify: Reload sshd service
+  listen: compliance_baseline reload sshd
+
+- name: Reload sshd service
+  ansible.builtin.service:
+    name: "{{ 'ssh' if aap_ops_os == 'ubuntu' else 'sshd' }}"
+    state: reloaded
+
+- name: Load audit rules
+  ansible.builtin.command: augenrules --load
+  changed_when: true
+  listen: compliance_baseline load audit rules

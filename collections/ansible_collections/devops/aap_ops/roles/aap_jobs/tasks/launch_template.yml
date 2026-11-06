@@ -1,0 +1,61 @@
+---
+- name: Launch a job template in batches
+  block:
+    - name: Validate input
+      ansible.builtin.assert:
+        that:
+          - launch_template_name | default('') | trim | length > 0
+          - launch_template_name is not search(aap_jobs_protected_name_regex)
+          - batch_size | default(0) | int >= 0
+        fail_msg: launch_template_name is required and must not be a protected template.
+        quiet: true
+
+    - name: Find template
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/job_templates/"
+        aap_api_query: {name: "{{ launch_template_name | trim }}"}
+
+    - name: Require exactly one template
+      ansible.builtin.assert:
+        that: aap_api_results | length == 1
+        fail_msg: "Found {{ aap_api_results | length }} job templates named '{{ launch_template_name }}'."
+        quiet: true
+
+    - name: Compute batches
+      ansible.builtin.set_fact:
+        _jt: "{{ aap_api_results[0] }}"
+        _batches: >-
+          {%- set hosts = (launch_limit | default('')).split(',') | map('trim') | select | list -%}
+          {%- if hosts | length == 0 -%}{{ [''] }}
+          {%- elif batch_size | default(0) | int == 0 or hosts | length <= batch_size | int -%}{{ [hosts | join(',')] }}
+          {%- else -%}{{ hosts | batch(batch_size | int) | map('join', ',') | list }}{%- endif -%}
+
+    - name: Require ask_limit_on_launch when a limit is used
+      ansible.builtin.assert:
+        that: _jt.ask_limit_on_launch or _batches == ['']
+        fail_msg: Template '{{ _jt.name }}' does not prompt for limit on launch; cannot batch.
+        quiet: true
+
+    - name: Run batches sequentially (stops at first failed batch)
+      ansible.builtin.include_tasks: _launch_batch.yml
+      loop: "{{ _batches }}"
+      loop_control: {loop_var: _batch, index_var: _batch_idx}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: >-
+          {%- set res = _launch_results | default([]) -%}
+          {%- set bad = res | rejectattr('status', 'equalto', 'successful') | list -%}
+          {%- set out = [{'host': 'summary', 'status': 'fail' if bad else 'changed',
+               'summary': (res | length) ~ ' of ' ~ (_batches | length) ~ ' batch(es) of ' ~ _jt.name ~ ' ran; ' ~ ((bad | length) ~ ' failed - remaining batches skipped' if bad else 'all successful'),
+               'details': {}}] -%}
+          {%- for r in res -%}
+          {%-   set _ = out.append({'host': 'batch ' ~ r.batch ~ ': ' ~ (r.limit or 'template default'), 'status': 'changed' if r.status == 'successful' else 'fail',
+                 'summary': 'job ' ~ r.id ~ ' ' ~ r.status ~ ' in ' ~ r.elapsed ~ 's', 'details': r}) -%}
+          {%- endfor -%}
+          {{ out }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Batch launch}

@@ -1,0 +1,18 @@
+---
+# Single request. Inputs: aap_api_path, aap_api_method (GET|POST|PATCH|DELETE),
+# aap_api_body (dict, optional), aap_api_status (list, default [200,201,202,204]).
+# Output: aap_api_response (uri result).
+- name: "{{ aap_api_method | default('GET') }} {{ aap_api_path }}"
+  ansible.builtin.uri:
+    url: "{{ aap_api_path if aap_api_path.startswith('http') else _aap_api_base ~ aap_api_path }}"
+    method: "{{ aap_api_method | default('GET') }}"
+    headers: "{{ _aap_api_headers }}"
+    url_username: "{{ aap_api_username if _aap_api_basic else omit }}"
+    url_password: "{{ aap_api_password if _aap_api_basic else omit }}"
+    force_basic_auth: "{{ _aap_api_basic }}"
+    body: "{{ aap_api_body | default(omit) }}"
+    body_format: json
+    validate_certs: "{{ aap_api_validate_certs }}"
+    timeout: "{{ aap_api_timeout }}"
+    status_code: "{{ aap_api_status | default([200, 201, 202, 204]) }}"
+  register: aap_api_response

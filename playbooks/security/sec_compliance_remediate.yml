@@ -1,0 +1,32 @@
+---
+# SEC - Compliance remediation (CIS or STIG)
+# Domain: Security Compliance. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES SYSTEMS. Applies remediation for the selected baseline's automatable controls, optionally restricted
+# to listed control IDs. Use the WF workflow (approval required).
+# Survey variables: compliance_profile, control_ids
+
+- name: SEC - Compliance remediation (CIS or STIG)
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: SEC - Compliance remediation (CIS or STIG)
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run compliance_baseline/remediate
+      ansible.builtin.include_role:
+        name: devops.aap_ops.compliance_baseline
+        tasks_from: remediate
+
+- name: Report - SEC - Compliance remediation (CIS or STIG)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SEC - Compliance remediation (CIS or STIG)
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

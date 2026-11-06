@@ -1,0 +1,88 @@
+---
+- name: Create change request
+  block:
+    - name: Validate input
+      ansible.builtin.assert:
+        that:
+          - sn_template_name | default('') | trim | length > 0
+          - sn_short_description | default('') | trim | length > 0
+          - sn_planned_start | default('') is match('^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+          - sn_planned_end | default('') is match('^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+          - _end_epoch | float > _start_epoch | float
+          - _end_epoch | float > now().timestamp()
+          - sn_change_type | default('normal') in ['normal', 'standard', 'emergency']
+        fail_msg: >-
+          Need sn_template_name, sn_short_description and a future window with sn_planned_start < sn_planned_end
+          in UTC 'YYYY-MM-DD HH:MM:SS'.
+        quiet: true
+      vars:
+        _start_epoch: "{{ ((sn_planned_start | default('1970-01-01 00:00:00') ~ ' +0000') | to_datetime('%Y-%m-%d %H:%M:%S %z')).timestamp() }}"
+        _end_epoch: "{{ ((sn_planned_end | default('1970-01-01 00:00:00') ~ ' +0000') | to_datetime('%Y-%m-%d %H:%M:%S %z')).timestamp() }}"
+
+    - name: Resolve affected hosts to CIs
+      ansible.builtin.include_tasks: _ci_lookup.yml
+      vars:
+        _ci_names: "{{ (sn_affected_hosts | default('')).split(',') | map('trim') | select | list }}"
+
+    - name: Create change request
+      servicenow.itsm.api:
+        resource: change_request
+        action: post
+        data: "{{ _chg | combine(_opt) }}"
+      register: _new
+      vars:
+        _hosts: "{{ (sn_affected_hosts | default('')).split(',') | map('trim') | select | list }}"
+        _chg:
+          type: "{{ sn_change_type | default('normal') }}"
+          short_description: "{{ sn_short_description | trim | truncate(160) }}"
+          description: |-
+            Automated change executed by Ansible Automation Platform.
+            AAP workflow/template: {{ sn_template_name | trim }}
+            AAP limit (affected hosts): {{ _hosts | join(', ') or 'template default inventory' }}
+            Planned window (UTC): {{ sn_planned_start }} - {{ sn_planned_end }}
+            The AAP workflow verifies this change is approved and in window before its approval node runs,
+            moves it to Implement when work starts and to Review with a close code when work ends.
+          start_date: "{{ sn_planned_start }}"
+          end_date: "{{ sn_planned_end }}"
+          risk: "{{ sn_risk_map[sn_risk | default('moderate')] }}"
+          impact: "{{ sn_impact_map['medium'] }}"
+          implementation_plan: "Launch AAP workflow '{{ sn_template_name | trim }}' with sn_change_number set to this change and limit '{{ _hosts | join(',') }}'."
+          backout_plan: "AAP workflow failure path closes this change unsuccessful and opens an incident; follow the template's documented rollback."
+          test_plan: "Workflow post-checks and aap_ops_result artifact (overall ok/warn/fail) recorded in the close notes."
+          correlation_id: "{{ sn_correlation_prefix }}:change:{{ sn_template_name | trim | truncate(80, true, '') }}"
+          correlation_display: "{{ sn_correlation_display }}"
+        _opt: >-
+          {{ ({'assignment_group': (sn_assignment_group | default('') or sn_default_assignment_group)}
+              if (sn_assignment_group | default('') or sn_default_assignment_group) else {})
+             | combine({'cmdb_ci': _ci_found[0].sys_id} if _ci_found | length > 0 else {}) }}
+
+    - name: Link remaining CIs as affected CIs
+      servicenow.itsm.api:
+        resource: task_ci
+        action: post
+        data: {task: "{{ _new.record.sys_id }}", ci_item: "{{ item.sys_id }}"}
+      loop: "{{ _ci_found[1:] }}"
+      loop_control: {label: "{{ item.name }}"}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ _new.record.number }}"
+            status: changed
+            summary: >-
+              {{ sn_change_type | default('normal') }} change {{ _new.record.number }} created for '{{ sn_template_name }}',
+              window {{ sn_planned_start }} - {{ sn_planned_end }} UTC, {{ _ci_found | length }} CI(s) linked
+              {%- if _missing | length > 0 %}; not in CMDB: {{ _missing | join(', ') }}{% endif %}. Submit it for approval in ServiceNow.
+            details: {change: "{{ _new.record.number }}", sys_id: "{{ _new.record.sys_id }}", cis: "{{ _ci_found | map(attribute='name') | list }}", missing_cis: "{{ _missing }}"}
+      vars:
+        _missing: >-
+          {%- set found = _ci_found | map(attribute='name') | map('lower') | map('regex_replace', '\\..*$', '') | list -%}
+          {%- set out = [] -%}
+          {%- for h in (sn_affected_hosts | default('')).split(',') | map('trim') | select -%}
+          {%-   if (h | lower | regex_replace('\\..*$', '')) not in found -%}{%- set _ = out.append(h) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Create change}

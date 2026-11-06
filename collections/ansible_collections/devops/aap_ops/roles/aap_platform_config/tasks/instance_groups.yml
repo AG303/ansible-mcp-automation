@@ -1,0 +1,51 @@
+---
+- name: Instances and instance groups
+  block:
+    - name: Get instances
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/instances/"
+        aap_api_query: {order_by: hostname}
+
+    - name: Keep instances
+      ansible.builtin.set_fact:
+        _inst: "{{ aap_api_results }}"
+
+    - name: Get instance groups
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/instance_groups/"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for i in _inst -%}
+          {%-   set hb = ((now().timestamp() - (((i.last_seen | default(none) or i.modified)[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 60) | int if (i.last_seen | default(none) or i.modified) else 9999 -%}
+          {%-   set issues = [] -%}
+          {%-   if not i.enabled -%}{%- set _ = issues.append('disabled') -%}{%- endif -%}
+          {%-   if i.errors | default('') -%}{%- set _ = issues.append('errors: ' ~ i.errors | truncate(120)) -%}{%- endif -%}
+          {%-   if i.node_state | default('ready') not in ['ready', 'installed', 'provisioning'] -%}{%- set _ = issues.append('state ' ~ i.node_state) -%}{%- endif -%}
+          {%-   if i.node_type in ['control', 'hybrid', 'execution'] and (i.capacity | default(0) | int) == 0 -%}{%- set _ = issues.append('zero capacity') -%}{%- endif -%}
+          {%-   if hb > aap_platform_config_instance_heartbeat_warn_min | int and i.node_type != 'hop' -%}{%- set _ = issues.append('last seen ' ~ hb ~ ' min ago') -%}{%- endif -%}
+          {%-   set groups = aap_api_results | selectattr('id', 'in', i.summary_fields.instance_groups | default([]) | map(attribute='id') | list) | map(attribute='name') | list -%}
+          {%-   set _ = out.append({'host': i.hostname, 'status': 'fail' if ('zero capacity' in issues or i.errors | default('')) else ('warn' if issues else 'ok'),
+                 'summary': i.node_type ~ ' node, v' ~ i.version | default('?') ~ ', capacity ' ~ i.consumed_capacity | default(0) ~ '/' ~ i.capacity | default(0)
+                            ~ ', ' ~ i.jobs_running | default(0) ~ ' running, groups ' ~ (groups | join(',') or 'none') ~ ((' - ' ~ issues | join('; ')) if issues else ''),
+                 'details': {'id': i.id, 'node_type': i.node_type, 'node_state': i.node_state | default(''), 'cpu': i.cpu | default(''),
+                             'memory_gb': ((i.memory | default(0) | int) / 1073741824) | round(1), 'groups': groups, 'issues': issues}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'fail' if _rows | selectattr('status', 'equalto', 'fail') | list else ('warn' if _rows | selectattr('status', 'equalto', 'warn') | list else 'ok') }}"
+          summary: >-
+            {{ _inst | length }} instance(s) (types: {{ _inst | map(attribute='node_type') | unique | join(', ') }}),
+            {{ aap_api_results | length }} instance group(s): {{ aap_api_results | map(attribute='name') | join(', ') }}
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Instances}

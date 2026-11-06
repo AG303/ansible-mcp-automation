@@ -1,0 +1,50 @@
+---
+# Inputs: _p_short, _p_desc, _p_impact, _p_urgency, _p_ci (name or ''), _p_incidents (list of INC numbers)
+# Output: _p_new (record), _p_linked (list of linked INC numbers)
+- name: Resolve linked incidents
+  when: _p_incidents | length > 0
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+  vars:
+    sn_q_table: incident
+    sn_q_query: "numberIN{{ _p_incidents | join(',') }}"
+    sn_q_fields: [sys_id, number, problem_id, cmdb_ci]
+    sn_q_limit: 500
+
+- name: Keep incidents
+  ansible.builtin.set_fact:
+    _p_inc_recs: "{{ sn_q_records if _p_incidents | length > 0 else [] }}"
+
+- name: Create problem
+  servicenow.itsm.api:
+    resource: problem
+    action: post
+    data: "{{ _base | combine(_opt) }}"
+  register: _p_created
+  vars:
+    _base:
+      short_description: "{{ _p_short | truncate(160) }}"
+      description: "{{ _p_desc | truncate(30000) }}"
+      impact: "{{ sn_impact_map[_p_impact | default('medium')] }}"
+      urgency: "{{ sn_impact_map[_p_urgency | default('medium')] }}"
+      work_notes: "Opened by AAP job {{ tower_job_id | default('local') }}. Linked incidents: {{ _p_incidents | join(', ') or 'none' }}."
+    _opt: >-
+      {{ ({'assignment_group': sn_default_assignment_group} if sn_default_assignment_group else {})
+         | combine({'cmdb_ci': (_p_inc_recs | map(attribute='cmdb_ci') | select | first)} if (_p_inc_recs | map(attribute='cmdb_ci') | select | list) else {})
+         | combine({'first_reported_by_task': (_p_inc_recs | first).sys_id} if _p_inc_recs else {}) }}
+
+- name: Link incidents to the problem
+  servicenow.itsm.api:
+    resource: incident
+    action: patch
+    sys_id: "{{ item.sys_id }}"
+    data:
+      problem_id: "{{ _p_created.record.sys_id }}"
+      work_notes: "Linked to problem {{ _p_created.record.number }} by AAP."
+  loop: "{{ _p_inc_recs | rejectattr('problem_id') | list }}"
+  loop_control: {label: "{{ item.number }}"}
+
+- name: Record
+  ansible.builtin.set_fact:
+    _p_new: "{{ _p_created.record }}"
+    _p_linked: "{{ _p_inc_recs | rejectattr('problem_id') | map(attribute='number') | list }}"
+    _p_already: "{{ _p_inc_recs | selectattr('problem_id') | map(attribute='number') | list }}"

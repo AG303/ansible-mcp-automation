@@ -1,0 +1,36 @@
+---
+- name: Backup audit
+  block:
+    - name: Get backups
+      kubernetes.core.k8s_info:
+        api_version: "{{ aap_operator_api_version }}"
+        kind: "{{ aap_operator_backup_kind }}"
+        namespace: "{{ aap_namespace }}"
+      register: _bks
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for b in _bks.resources | sort(attribute='metadata.creationTimestamp', reverse=true) -%}
+          {%-   set ok = b.status.conditions | default([]) | selectattr('type', 'equalto', 'Successful') | selectattr('status', 'equalto', 'True') | list | length > 0 -%}
+          {%-   set age = ((now().timestamp() - ((b.metadata.creationTimestamp[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 86400) | round(1) -%}
+          {%-   set _ = out.append({'host': b.metadata.name, 'status': 'ok' if ok else 'warn',
+                   'summary': ('successful' if ok else 'not successful') ~ ', ' ~ age ~ ' day(s) old, deployment ' ~ b.spec.deployment_name | default('?'),
+                   'details': {'age_days': age, 'successful': ok, 'claim': b.status.backupClaim | default('')}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _good: "{{ _rows | selectattr('details.successful') | list }}"
+        _summary:
+          host: summary
+          status: "{{ 'fail' if (_good | length == 0 or (_good | first).details.age_days | float > max_age_days | default(7) | float) else 'ok' }}"
+          summary: >-
+            {{ _rows | length }} backup CR(s); newest successful
+            {{ ((_good | first).details.age_days ~ ' day(s) old') if _good else 'none' }} (policy {{ max_age_days | default(7) }} days)
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Backup audit}

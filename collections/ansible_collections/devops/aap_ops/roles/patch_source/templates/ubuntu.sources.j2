@@ -1,0 +1,12 @@
+# Managed by Ansible (devops.aap_ops.patch_source) - source: {{ _src }}
+Types: deb
+URIs: {{ _apt_main }}
+Suites: {{ ansible_distribution_release }} {{ ansible_distribution_release }}-updates {{ ansible_distribution_release }}-backports
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: {{ _apt_sec }}
+Suites: {{ ansible_distribution_release }}-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

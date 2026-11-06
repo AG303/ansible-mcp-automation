@@ -1,0 +1,58 @@
+---
+# ---- SSH
+host_hardening_ssh_settings:
+  PermitEmptyPasswords: "no"
+  HostbasedAuthentication: "no"
+  IgnoreRhosts: "yes"
+  X11Forwarding: "no"
+  MaxAuthTries: 4
+  MaxSessions: 10
+  LoginGraceTime: 60
+  ClientAliveInterval: 300
+  ClientAliveCountMax: 3
+  LogLevel: VERBOSE
+  Banner: /etc/issue.net
+# RHEL manages sshd algorithms through system-wide crypto policies; only set
+# explicit algorithms on Ubuntu unless overridden.
+host_hardening_ssh_set_algorithms: "{{ aap_ops_os == 'ubuntu' }}"
+host_hardening_ssh_ciphers: chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+host_hardening_ssh_macs: hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+host_hardening_ssh_kex: curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256
+host_hardening_banner_text: |
+  Authorized use only. Activity on this system is monitored and recorded.
+  Disconnect now if you are not an authorized user.
+# ---- Password policy
+host_hardening_pw_min_class: 4
+host_hardening_pw_min_days: 1
+host_hardening_pw_warn_age: 7
+host_hardening_lockout_unlock_time: 900
+host_hardening_lockout_window: 900
+# ---- Firewall
+host_hardening_firewall_prune: false     # remove ports/services not in the allow-list
+host_hardening_firewall_always_allow_linux: ["{{ ansible_port | default(22) }}"]
+host_hardening_firewall_always_allow_windows: ["5985", "5986", "3389"]
+# ---- Audit logging
+host_hardening_audit_profile: "{{ compliance_profile | default('cis') }}"
+host_hardening_auditd_max_log_file: 32
+host_hardening_auditd_num_logs: 10
+host_hardening_win_audit_subcategories:
+  - {subcategory: Credential Validation, audit_type: [success, failure]}
+  - {subcategory: Security Group Management, audit_type: [success]}
+  - {subcategory: User Account Management, audit_type: [success, failure]}
+  - {subcategory: Process Creation, audit_type: [success]}
+  - {subcategory: Account Lockout, audit_type: [failure]}
+  - {subcategory: Logoff, audit_type: [success]}
+  - {subcategory: Logon, audit_type: [success, failure]}
+  - {subcategory: Special Logon, audit_type: [success]}
+  - {subcategory: Removable Storage, audit_type: [success, failure]}
+  - {subcategory: Audit Policy Change, audit_type: [success, failure]}
+  - {subcategory: Authentication Policy Change, audit_type: [success]}
+  - {subcategory: Sensitive Privilege Use, audit_type: [success, failure]}
+  - {subcategory: Security State Change, audit_type: [success]}
+  - {subcategory: Security System Extension, audit_type: [success]}
+  - {subcategory: System Integrity, audit_type: [success, failure]}
+host_hardening_win_audit_stig_extra:
+  - {subcategory: Other Object Access Events, audit_type: [success, failure]}
+  - {subcategory: File Share, audit_type: [success, failure]}
+  - {subcategory: Other Logon/Logoff Events, audit_type: [success, failure]}
+host_hardening_win_security_log_kb: "{{ 1024000 if host_hardening_audit_profile == 'stig' else 196608 }}"

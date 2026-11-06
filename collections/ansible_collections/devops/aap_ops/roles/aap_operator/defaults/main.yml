@@ -1,0 +1,13 @@
+---
+# kubernetes.core reads K8S_AUTH_HOST / K8S_AUTH_API_KEY / K8S_AUTH_VERIFY_SSL
+# injected by the "OpenShift or Kubernetes API Bearer Token" credential.
+aap_namespace: aap
+aap_cr_name: aap
+aap_operator_api_version: aap.ansible.com/v1alpha1
+aap_operator_kind: AnsibleAutomationPlatform
+aap_operator_backup_kind: AnsibleAutomationPlatformBackup
+aap_operator_wait_timeout: 1800
+aap_operator_component_kinds:
+  - {api_version: automationcontroller.ansible.com/v1beta1, kind: AutomationController}
+  - {api_version: automationhub.ansible.com/v1beta1, kind: AutomationHub}
+  - {api_version: eda.ansible.com/v1alpha1, kind: EDA}

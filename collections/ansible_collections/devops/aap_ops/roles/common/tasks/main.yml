@@ -1,0 +1,52 @@
+---
+# Bootstrap for host-targeted plays (use with gather_facts: false).
+# 1. Records the full target list on localhost so the report play can mark
+#    hosts that never produced a result (unreachable/failed) as "fail".
+# 2. Gathers facts without letting an unreachable host abort the play.
+# 3. Sets aap_ops_os: rhel | ubuntu | windows | unsupported.
+- name: Record targeted hosts for the report play
+  run_once: true
+  delegate_to: localhost
+  delegate_facts: true
+  ansible.builtin.set_fact:
+    _aap_ops_targets: "{{ (hostvars['localhost']._aap_ops_targets | default([]) + ansible_play_hosts_all) | unique }}"
+
+- name: Gather facts
+  ansible.builtin.setup:
+    gather_subset: "{{ aap_ops_gather_subset }}"
+  ignore_unreachable: true
+  ignore_errors: true
+  register: _aap_ops_setup
+
+- name: Record unreachable host
+  when: _aap_ops_setup is unreachable or _aap_ops_setup is failed
+  block:
+    - name: Mark host failed
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: fail
+          summary: "Host unreachable or fact gathering failed: {{ _aap_ops_setup.msg | default('unknown error') | truncate(300) }}"
+          details: {}
+    - name: Stop processing this host
+      ansible.builtin.meta: end_host
+
+- name: Determine aap_ops OS family
+  ansible.builtin.set_fact:
+    aap_ops_os: >-
+      {{ 'windows' if ansible_os_family | default('') == 'Windows'
+         else ('rhel' if ansible_os_family | default('') == 'RedHat'
+         else ('ubuntu' if ansible_os_family | default('') == 'Debian'
+         else 'unsupported')) }}
+    aap_ops_is_windows: "{{ ansible_os_family | default('') == 'Windows' }}"
+
+- name: Record unsupported platform
+  when: aap_ops_os == 'unsupported' or aap_ops_os not in aap_ops_supported_os
+  block:
+    - name: Mark host skipped
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: skipped
+          summary: "Not supported by this template: {{ ansible_distribution | default(ansible_os_family | default('unknown')) }}"
+          details: {}
+    - name: Stop processing this host
+      ansible.builtin.meta: end_host

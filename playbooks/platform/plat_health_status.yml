@@ -1,0 +1,21 @@
+---
+# PLAT - AAP platform health
+# Domain: Platform Configuration. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. AnsibleAutomationPlatform custom resource conditions, component pods and restarts, routes, and the
+# gateway/controller ping endpoints. Returns aap_ops_result.
+# Survey variables: aap_namespace, aap_cr_name
+
+- name: PLAT - AAP platform health
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PLAT - AAP platform health
+  tasks:
+    - name: Run aap_operator/health_status
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_operator
+        tasks_from: health_status
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

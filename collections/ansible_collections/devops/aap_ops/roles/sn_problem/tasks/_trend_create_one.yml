@@ -1,0 +1,20 @@
+---
+- name: "Create problem for {{ _cand.key }}"
+  ansible.builtin.include_tasks: _create_and_link.yml
+  vars:
+    _p_short: "Recurring incidents - {{ _cand.key }} ({{ _cand.unlinked | length }} in {{ days | default(30) }} days)"
+    _p_desc: |-
+      Opened automatically by AAP problem-trend analysis.
+      Group: {{ _cand.key }}
+      Incidents: {{ _cand.incidents | join(', ') }}
+      Examples:
+      {% for s in _cand.samples %}
+      - {{ s }}
+      {% endfor %}
+    _p_impact: medium
+    _p_urgency: medium
+    _p_incidents: "{{ _cand.unlinked }}"
+
+- name: Remember created problem
+  ansible.builtin.set_fact:
+    _trend_created: "{{ _trend_created | default({}) | combine({_cand.key: _p_new.number}) }}"

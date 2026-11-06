@@ -1,0 +1,4 @@
+---
+# Activity stream object types considered security-sensitive.
+aap_security_audit_sensitive_objects: [credential, credential_type, role, team, user, organization, setting, o_auth2_access_token, o_auth2_application]
+aap_security_audit_max_superusers: 3

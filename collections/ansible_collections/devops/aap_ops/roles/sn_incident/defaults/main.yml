@@ -1,0 +1,9 @@
+---
+sn_incident_list_limit: 200
+# Close codes accepted by the out-of-box incident form (Utah+ naming).
+sn_incident_close_codes: [Solved (Work Around), Solved (Permanently), Solved Remotely (Work Around), Solved Remotely (Permanently), Not Solved (Not Reproducible), Not Solved (Too Costly), Closed/Resolved by Caller, Duplicate, Known error, No resolution provided, Resolved by caller, Resolved by change, Resolved by problem, Solution provided, User error, Workaround provided]
+# Remediations allowed for sn_incident_remediate (maps to host_monitor tasks).
+sn_incident_remediations:
+  restart_service: service_restart
+  disk_cleanup: disk_cleanup
+  clear_temp: disk_cleanup

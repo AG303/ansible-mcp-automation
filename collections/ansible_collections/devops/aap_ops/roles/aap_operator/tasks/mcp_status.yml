@@ -1,0 +1,43 @@
+---
+- name: MCP server status
+  block:
+    - name: Get AAP CR
+      ansible.builtin.include_tasks: _get_cr.yml
+
+    - name: Get routes
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "{{ aap_namespace }}"
+      register: _routes
+
+    - name: Get deployments
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ aap_namespace }}"
+      register: _deploys
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "MCP server ({{ aap_cr_name }})"
+            status: "{{ 'skipped' if not _enabled else ('ok' if (_route and _ready) else 'fail') }}"
+            summary: >-
+              {{ 'enabled in CR' if _enabled else 'disabled in CR (spec.mcp.disabled is true or unset)' }};
+              route {{ ('https://' ~ (_route | first).spec.host) if _route else 'not found' }};
+              deployment {{ (_mcp_dep | first).metadata.name if _mcp_dep else 'not found' }}
+              {{- (' ready ' ~ (_mcp_dep | first).status.readyReplicas | default(0) ~ '/' ~ (_mcp_dep | first).spec.replicas | default(1)) if _mcp_dep else '' }}
+            details:
+              spec_mcp: "{{ _aap_cr.spec.mcp | default({}) }}"
+              mcp_url: "{{ ('https://' ~ (_route | first).spec.host ~ '/mcp') if _route else '' }}"
+              note: Clients authenticate with an AAP personal access token (Authorization Bearer header).
+      vars:
+        _enabled: "{{ not (_aap_cr.spec.mcp.disabled | default(true) | bool) }}"
+        _route: "{{ _routes.resources | selectattr('metadata.name', 'search', '-mcp$') | list }}"
+        _mcp_dep: "{{ _deploys.resources | selectattr('metadata.name', 'search', 'mcp') | list }}"
+        _ready: "{{ _mcp_dep | length > 0 and ((_mcp_dep | first).status.readyReplicas | default(0) | int) > 0 }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: MCP status}

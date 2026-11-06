@@ -1,0 +1,36 @@
+---
+- name: Change start
+  block:
+    - name: Load change
+      ansible.builtin.include_tasks: _load_change.yml
+
+    - name: Refuse unapproved changes
+      ansible.builtin.assert:
+        that: _chg.approval == 'approved'
+        fail_msg: "{{ _chg.number }} is not approved ({{ _chg_disp.approval }})."
+        quiet: true
+
+    - name: Move to Implement and record AAP job link
+      servicenow.itsm.api:
+        resource: change_request
+        action: patch
+        sys_id: "{{ _chg.sys_id }}"
+        data: >-
+          {{ ({'state': sn_change_state_map.implement} if _chg.state | string != sn_change_state_map.implement else {})
+             | combine({'work_start': now(utc=true).strftime('%Y-%m-%d %H:%M:%S'),
+                        'work_notes': 'AAP started implementation. Workflow job ' ~ _wf_id ~ ' (approved in AAP by ' ~ (tower_user_name | default('workflow')) ~ ').'
+                                      ~ ((' ' ~ sn_aap_ui_url | regex_replace('/+$', '') ~ '/execution/jobs/workflow/' ~ _wf_id ~ '/output') if sn_aap_ui_url and _wf_id != 'n/a' else '')}) }}
+      vars:
+        _wf_id: "{{ tower_workflow_job_id | default(awx_workflow_job_id | default('n/a')) }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ _chg.number }}"
+            status: changed
+            summary: "{{ _chg.number }} moved to Implement ({{ _chg_disp.state }} before); work note added"
+            details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Change start}

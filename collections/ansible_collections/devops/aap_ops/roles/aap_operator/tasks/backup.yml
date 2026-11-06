@@ -1,0 +1,41 @@
+---
+- name: Create platform backup
+  block:
+    - name: Get AAP CR
+      ansible.builtin.include_tasks: _get_cr.yml
+
+    - name: Create AnsibleAutomationPlatformBackup
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: "{{ aap_operator_api_version }}"
+          kind: "{{ aap_operator_backup_kind }}"
+          metadata:
+            name: "{{ _backup_name }}"
+            namespace: "{{ aap_namespace }}"
+            labels: {app.kubernetes.io/managed-by: aap-ops, aap-ops/job-id: "{{ tower_job_id | default('local') | string }}"}
+          spec:
+            deployment_name: "{{ aap_cr_name }}"
+            backup_storage_requirements: "{{ backup_pvc_size | default('20Gi') }}"
+            use_db_compression: true
+            no_log: true
+        wait: true
+        wait_condition: {type: Successful, status: "True"}
+        wait_timeout: "{{ aap_operator_wait_timeout }}"
+      register: _bk
+      vars:
+        _backup_name: "{{ aap_cr_name }}-backup-{{ now(utc=true).strftime('%Y%m%d-%H%M%S') }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ aap_operator_backup_kind }}/{{ _bk.result.metadata.name }}"
+            status: changed
+            summary: >-
+              Backup of {{ aap_cr_name }} completed;
+              claim {{ _bk.result.status.backupClaim | default('?') }}, directory {{ _bk.result.status.backupDirectory | default('?') }}
+            details: {status: "{{ _bk.result.status | default({}) }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Platform backup}

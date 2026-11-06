@@ -1,0 +1,55 @@
+---
+- name: Job template audit
+  block:
+    - name: Get job templates
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/job_templates/"
+        aap_api_query: {order_by: name}
+
+    - name: Keep templates
+      ansible.builtin.set_fact:
+        _jts: "{{ aap_api_results }}"
+
+    - name: Get jobs in the stale window
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/jobs/"
+        aap_api_query:
+          finished__gt: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(now().timestamp() - (stale_days | default(90) | int) * 86400, utc=true) }}"
+          order_by: -finished
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + (_rows | rejectattr('status', 'equalto', 'ok') | list) }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for t in _jts -%}
+          {%-   set jobs = aap_api_results | selectattr('job_template', 'equalto', t.id) | list -%}
+          {%-   set failed = jobs | selectattr('status', 'in', ['failed', 'error']) | list | length -%}
+          {%-   set rate = ((failed * 100.0 / (jobs | length)) | round(1)) if jobs else 0 -%}
+          {%-   set issues = [] -%}
+          {%-   if not jobs -%}{%- set _ = issues.append('no runs in ' ~ (stale_days | default(90)) ~ ' days') -%}{%- endif -%}
+          {%-   if jobs and rate >= (failure_rate_pct | default(20) | float) -%}{%- set _ = issues.append('failure rate ' ~ rate ~ '%') -%}{%- endif -%}
+          {%-   if not t.execution_environment -%}{%- set _ = issues.append('no explicit execution environment') -%}{%- endif -%}
+          {%-   if t.ask_variables_on_launch and not t.survey_enabled -%}{%- set _ = issues.append('prompts for extra vars without a survey') -%}{%- endif -%}
+          {%-   if t.verbosity | int >= 3 -%}{%- set _ = issues.append('verbosity ' ~ t.verbosity) -%}{%- endif -%}
+          {%-   if t.status == 'never updated' or not t.project -%}{%- set _ = issues.append('project missing or never synced') -%}{%- endif -%}
+          {%-   set _ = out.append({'host': t.name, 'status': 'warn' if issues else 'ok',
+                 'summary': (jobs | length) ~ ' runs, ' ~ failed ~ ' failed (' ~ rate ~ '%)' ~ ((' - ' ~ issues | join('; ')) if issues else ''),
+                 'details': {'id': t.id, 'runs': jobs | length, 'failed': failed, 'failure_rate_pct': rate, 'issues': issues,
+                             'last_job_run': t.last_job_run | default(none)}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _rows | selectattr('status', 'equalto', 'warn') | list | length > 0 else 'ok' }}"
+          summary: >-
+            {{ _jts | length }} job templates audited; {{ _rows | selectattr('status', 'equalto', 'warn') | list | length }} with findings
+            ({{ aap_api_results | length }} jobs in the last {{ stale_days | default(90) }} days{{ ', job list truncated at max pages' if aap_api_count | int > aap_api_results | length else '' }})
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Job template audit}

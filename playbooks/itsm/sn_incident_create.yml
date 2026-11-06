@@ -1,0 +1,27 @@
+---
+# SN - Create incident
+# Domain: ServiceNow Incident. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Writes ServiceNow records only. Opens an incident (or adds a work note to the open duplicate with the same
+# correlation ID) with impact, urgency, assignment group and configuration item. Returns the incident number in
+# aap_ops_result.
+# Survey variables: sn_short_description, sn_description, sn_impact, sn_urgency, sn_assignment_group,
+#   sn_cmdb_ci, sn_correlation_id
+
+- name: SN - Create incident
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Create incident
+  tasks:
+    - name: ServiceNow connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: Run sn_incident/create
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_incident
+        tasks_from: create
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

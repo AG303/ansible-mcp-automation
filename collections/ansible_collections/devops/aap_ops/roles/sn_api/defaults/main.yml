@@ -1,0 +1,24 @@
+---
+# servicenow.itsm modules read SN_HOST, SN_USERNAME, SN_PASSWORD from the
+# environment injected by the "ServiceNow ITSM (basic auth)" credential type
+# (aap_config/vars/controller_credential_types.yml). Basic auth only.
+sn_host: "{{ lookup('ansible.builtin.env', 'SN_HOST') }}"
+sn_username: "{{ lookup('ansible.builtin.env', 'SN_USERNAME') }}"
+sn_password: "{{ lookup('ansible.builtin.env', 'SN_PASSWORD') }}"
+sn_validate_certs: true
+# Upper bound for list queries made through tasks/query.yml (Table API sysparm_limit).
+sn_query_limit: 500
+# Defaults applied to records created by automation.
+sn_default_assignment_group: "{{ lookup('ansible.builtin.env', 'SN_ASSIGNMENT_GROUP') | default('', true) }}"
+sn_default_caller: "{{ sn_username }}"
+sn_correlation_prefix: "aap_ops"
+sn_correlation_display: "Ansible Automation Platform"
+# AAP gateway URL used to build job links in work notes (AAP 2.6 UI path).
+sn_aap_ui_url: >-
+  {{ lookup('ansible.builtin.env', 'AAP_HOSTNAME') or lookup('ansible.builtin.env', 'CONTROLLER_HOST') or '' }}
+# Value maps for the Table API (out-of-box ServiceNow choice values).
+sn_impact_map: {high: "1", medium: "2", low: "3"}
+sn_risk_map: {high: "2", moderate: "3", low: "4"}
+sn_incident_state_map: {new: "1", in_progress: "2", on_hold: "3", resolved: "6", closed: "7", canceled: "8"}
+sn_change_state_map: {new: "-5", assess: "-4", authorize: "-3", scheduled: "-2", implement: "-1", review: "0", closed: "3", canceled: "4"}
+sn_problem_state_map: {new: "101", assess: "102", root_cause_analysis: "103", fix_in_progress: "104", resolved: "106", closed: "107"}

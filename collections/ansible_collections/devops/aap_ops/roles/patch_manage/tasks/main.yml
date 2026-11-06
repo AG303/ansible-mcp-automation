@@ -1,0 +1,3 @@
+---
+- name: Default to available updates
+  ansible.builtin.include_tasks: available.yml

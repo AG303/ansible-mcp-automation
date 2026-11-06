@@ -1,0 +1,3 @@
+---
+- name: Default to instance groups
+  ansible.builtin.include_tasks: instance_groups.yml

@@ -1,0 +1,25 @@
+---
+# Input _svc_list (list of names). Output _svc_down (names not running).
+- name: Linux - service facts
+  when: not aap_ops_is_windows and _svc_list | length > 0
+  ansible.builtin.service_facts:
+
+- name: Windows - service info
+  when: aap_ops_is_windows and _svc_list | length > 0
+  ansible.windows.win_service_info:
+  register: _svc_info_win
+
+- name: Compute services not running
+  ansible.builtin.set_fact:
+    _svc_down: >-
+      {%- set d = [] -%}
+      {%- for n in _svc_list -%}
+      {%-   if aap_ops_is_windows -%}
+      {%-     set s = _svc_info_win.services | default([]) | selectattr('name', 'equalto', n) | list -%}
+      {%-     if not s or s[0].state != 'started' -%}{%- set _ = d.append(n) -%}{%- endif -%}
+      {%-   else -%}
+      {%-     set s = ansible_facts.services[n] | default(ansible_facts.services[n ~ '.service'] | default({})) -%}
+      {%-     if s.state | default('') != 'running' -%}{%- set _ = d.append(n) -%}{%- endif -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ d }}

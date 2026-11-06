@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  author: DevOps Automation
+  description: Gateway/controller REST helpers for AAP 2.6 (connection resolution and paginated GET).
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms:
+    - {name: EL, versions: ["9"]}
+dependencies: []

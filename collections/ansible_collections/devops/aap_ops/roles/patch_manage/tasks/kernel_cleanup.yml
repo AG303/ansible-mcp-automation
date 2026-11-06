@@ -1,0 +1,53 @@
+---
+# CHANGING. Linux only. Keeps the running kernel plus the newest keep_kernels.
+- name: Old kernel cleanup
+  block:
+    - name: RHEL - remove old installonly kernels
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.shell: |
+        set -o pipefail
+        before=$(rpm -q kernel-core 2>/dev/null | wc -l)
+        old=$(dnf -q repoquery --installonly --latest-limit=-{{ [keep_kernels | default(2) | int, 1] | max }} 2>/dev/null | grep -v "$(uname -r)" || true)
+        if [ -n "$old" ]; then dnf -y remove $old >/dev/null; fi
+        after=$(rpm -q kernel-core 2>/dev/null | wc -l)
+        echo "$before|$after|$(echo $old | tr ' ' ',')"
+      args:
+        executable: /bin/bash
+      register: _kc_rhel
+      changed_when: _kc_rhel.stdout.split('|')[2] | length > 0
+
+    - name: Ubuntu - find removable kernel images
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.shell: |
+        set -o pipefail
+        running=$(uname -r)
+        dpkg-query -W -f='${Package} ${Status}\n' 'linux-image-[0-9]*' 2>/dev/null | awk '/install ok installed/ {print $1}' \
+          | grep -v "linux-image-${running}$" | sort -V | head -n -{{ [(keep_kernels | default(2) | int) - 1, 0] | max }} || true
+      args:
+        executable: /bin/bash
+      register: _kc_ubuntu_list
+      changed_when: false
+      check_mode: false
+
+    - name: Ubuntu - purge old kernels
+      when: aap_ops_os == 'ubuntu' and _kc_ubuntu_list.stdout_lines | length > 0
+      ansible.builtin.apt:
+        name: "{{ _kc_ubuntu_list.stdout_lines + (_kc_ubuntu_list.stdout_lines | map('regex_replace', '^linux-image-', 'linux-modules-') | list) }}"
+        state: absent
+        purge: true
+        autoremove: true
+      register: _kc_ubuntu
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if _removed | length > 0 else 'ok' }}"
+          summary: "{{ (_removed | length) ~ ' old kernel package(s) removed' if _removed else 'Nothing to remove' }}; running {{ ansible_kernel }}"
+          details: {removed: "{{ _removed }}", keep: "{{ keep_kernels | default(2) }}", running: "{{ ansible_kernel }}"}
+      vars:
+        _removed: >-
+          {{ (_kc_rhel.stdout.split('|')[2].split(',') | select | list) if aap_ops_os == 'rhel' else (_kc_ubuntu_list.stdout_lines | default([])) }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Kernel cleanup}

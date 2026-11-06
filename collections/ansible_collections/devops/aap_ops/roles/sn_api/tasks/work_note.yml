@@ -1,0 +1,22 @@
+---
+- name: "Find {{ sn_note_table }} {{ sn_note_number }}"
+  servicenow.itsm.api_info:
+    resource: "{{ sn_note_table }}"
+    sysparm_query: "number={{ sn_note_number | trim | upper }}"
+    columns: [sys_id, number]
+  register: _sn_note_rec
+
+- name: Fail when the record does not exist
+  ansible.builtin.assert:
+    that: _sn_note_rec.record | length == 1
+    fail_msg: "{{ sn_note_table }} {{ sn_note_number }} was not found in ServiceNow."
+    quiet: true
+
+- name: "Add work note to {{ sn_note_number }}"
+  servicenow.itsm.api:
+    resource: "{{ sn_note_table }}"
+    action: patch
+    sys_id: "{{ _sn_note_rec.record[0].sys_id }}"
+    data:
+      work_notes: "{{ sn_note_text | truncate(sn_note_max_chars | default(30000)) }}"
+  register: sn_note_result

@@ -1,0 +1,115 @@
+---
+# Collects root-cause evidence from ServiceNow and AAP job history and records it
+# on a problem_task (type rca) plus a work note on the problem.
+- name: Problem root cause evidence
+  block:
+    - name: Look up problem
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: lookup}
+      vars: {sn_lookup_table: problem, sn_lookup_number: "{{ sn_problem_number }}"}
+
+    - name: Keep problem
+      ansible.builtin.set_fact:
+        _prb: "{{ sn_record }}"
+        _prb_disp: "{{ sn_record_display }}"
+
+    - name: Linked incidents
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: incident
+        sn_q_query: "problem_id={{ _prb.sys_id }}^ORDERBYopened_at"
+        sn_q_fields: [number, short_description, cmdb_ci, correlation_id, opened_at, state, close_notes]
+        sn_q_display: "true"
+        sn_q_limit: 500
+
+    - name: Derive hosts and templates
+      ansible.builtin.set_fact:
+        _incs: "{{ sn_q_records }}"
+        _hosts: "{{ ([_prb_disp.cmdb_ci | default('')] + (sn_q_records | map(attribute='cmdb_ci') | list)) | select | unique | list }}"
+        _tpls: >-
+          {{ sn_q_records | map(attribute='correlation_id') | select('match', sn_correlation_prefix ~ ':')
+             | map('split', ':') | map(attribute=1) | reject('equalto', 'manual') | unique | list }}
+
+    - name: AAP host failures for those hosts
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/job_host_summaries/"
+        aap_api_query:
+          host_name__in: "{{ (_hosts + (_hosts | map('regex_replace', '\\..*$', '') | list)) | unique | join(',') }}"
+          or__failed: "true"
+          or__dark__gt: 0
+          created__gt: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(now().timestamp() - (days | default(30) | int) * 86400, utc=true) }}"
+          order_by: -created
+      when: _hosts | length > 0
+
+    - name: Keep host failures
+      ansible.builtin.set_fact:
+        _hf: "{{ aap_api_results if _hosts | length > 0 else [] }}"
+
+    - name: Failure evidence for most recent failing jobs
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: job_evidence}
+      vars:
+        aap_evidence_job_id: "{{ _jid }}"
+      loop: "{{ (_hf | map(attribute='job') | unique | list)[:sn_problem_rca_max_jobs | int] }}"
+      loop_control: {loop_var: _jid}
+
+    - name: Compose evidence
+      ansible.builtin.set_fact:
+        _ev_text: |-
+          Root-cause evidence gathered by AAP job {{ tower_job_id | default('local') }} ({{ days | default(30) }}-day window).
+
+          Linked incidents ({{ _incs | length }}):
+          {% for i in _incs[:30] %}
+          - {{ i.number }} {{ i.opened_at }} [{{ i.state }}] {{ i.cmdb_ci or 'no CI' }}: {{ i.short_description | truncate(100) }}
+          {% endfor %}
+
+          Hosts: {{ _hosts | join(', ') or 'none identified' }}
+          AAP templates in incident correlation IDs: {{ _tpls | join(', ') or 'none' }}
+
+          AAP failed/unreachable host runs: {{ _hf | length }}
+          {% for g in _hf | groupby('host_name') %}
+          - {{ g[0] }}: {{ g[1] | length }} run(s); templates {{ g[1] | map(attribute='summary_fields.job.name', default='?') | unique | join(', ') }}
+          {% endfor %}
+
+          Recurring failing tasks:
+          {% for j in _ev_collected | default([]) %}
+          {%   for t in j.failed_tasks[:5] %}
+          - job {{ j.id }} {{ j.name }} | {{ t.host }} | {{ t.task }} | {{ t.msg | truncate(200) }}
+          {%   endfor %}
+          {% endfor %}
+
+    - name: Create RCA problem task
+      servicenow.itsm.api:
+        resource: problem_task
+        action: post
+        data: >-
+          {{ {'problem': _prb.sys_id, 'problem_task_type': 'rca',
+              'short_description': ('AAP evidence for ' ~ _prb.number ~ ': ' ~ _prb.short_description) | truncate(160),
+              'description': _ev_text | truncate(30000)}
+             | combine({'assignment_group': _prb.assignment_group} if _prb.assignment_group | default('') else {}) }}
+      register: _ptask
+
+    - name: Move problem to Root Cause Analysis
+      when: _prb.state | string in [sn_problem_state_map.new, sn_problem_state_map.assess]
+      servicenow.itsm.api:
+        resource: problem
+        action: patch
+        sys_id: "{{ _prb.sys_id }}"
+        data:
+          state: "{{ sn_problem_state_map.root_cause_analysis }}"
+          work_notes: "AAP attached root-cause evidence in {{ _ptask.record.number }}."
+      register: _prb_moved
+      failed_when: false
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ _prb.number }}"
+            status: changed
+            summary: >-
+              {{ _ptask.record.number }} (rca) created with {{ _incs | length }} incident(s), {{ _hosts | length }} host(s),
+              {{ _hf | length }} AAP host failure(s){{ '; state -> Root Cause Analysis' if (_prb_moved is not skipped and not _prb_moved.failed | default(false)) else '' }}
+            details: {problem_task: "{{ _ptask.record.number }}", hosts: "{{ _hosts }}", templates: "{{ _tpls }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Problem RCA}

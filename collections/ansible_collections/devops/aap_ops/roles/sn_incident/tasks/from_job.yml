@@ -1,0 +1,73 @@
+---
+- name: Incident from failed AAP job
+  block:
+    - name: Resolve source job
+      ansible.builtin.set_fact:
+        _src_id: >-
+          {{ (sn_source_job_id | default(0) | int) if (sn_source_job_id | default(0) | int) > 0
+             else (tower_workflow_job_id | default(awx_workflow_job_id | default(0)) | int) }}
+
+    - name: Require a source job
+      ansible.builtin.assert:
+        that: _src_id | int > 0
+        fail_msg: Set sn_source_job_id, or run this template as a failure node inside a workflow.
+        quiet: true
+
+    - name: Collect AAP evidence
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: job_evidence}
+      vars:
+        aap_evidence_job_id: "{{ _src_id }}"
+
+    - name: Compose incident
+      ansible.builtin.set_fact:
+        _inc_hosts: "{{ aap_evidence.failed_jobs | map(attribute='failed_hosts') | flatten | unique | list }}"
+        _inc_template: >-
+          {{ aap_evidence.name if aap_evidence.type == 'workflow_job' else aap_evidence.name }}
+        _inc_desc: |-
+          AAP {{ 'workflow' if aap_evidence.type == 'workflow_job' else 'job' }} {{ aap_evidence.id }} "{{ aap_evidence.name }}" finished {{ aap_evidence.status }}.
+          Started {{ aap_evidence.started }} / finished {{ aap_evidence.finished | default('running') }}. Limit: {{ aap_evidence.limit or 'none' }}.
+          Job output: {{ aap_evidence.url }}
+          {% if aap_evidence.nodes %}
+
+          Workflow nodes:
+          {% for n in aap_evidence.nodes %}
+            - {{ n.name }} (job {{ n.id }}): {{ n.status }}
+          {% endfor %}
+          {% endif %}
+          {% for j in aap_evidence.failed_jobs %}
+
+          Failed job {{ j.id }} "{{ j.name }}" ({{ j.status }}){{ (' - ' ~ j.explanation) if j.explanation else '' }}
+            Failed/unreachable hosts: {{ j.failed_hosts | join(', ') or 'none recorded' }}
+          {%   for t in j.failed_tasks[:10] %}
+            - {{ t.host }} | {{ t.task }} | {{ t.event | replace('runner_on_', '') }} | {{ t.msg }}
+          {%   endfor %}
+          {%   if j.result %}
+            aap_ops_result: overall={{ j.result.overall | default('?') }} counts={{ j.result.counts | default({}) | to_json }}
+          {%   endif %}
+          {% endfor %}
+
+    - name: Open or update de-duplicated incident
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: incident_upsert}
+      vars:
+        sn_upsert_short_description: >-
+          AAP: {{ aap_evidence.name }} {{ aap_evidence.status }}{{ (' on ' ~ (_inc_hosts[:3] | join(', ')) ~ (' +' ~ (_inc_hosts | length - 3) if _inc_hosts | length > 3 else '')) if _inc_hosts else '' }}
+        sn_upsert_description: "{{ _inc_desc }}"
+        sn_upsert_work_note: "{{ _inc_desc }}"
+        sn_upsert_impact: "{{ sn_impact | default('medium') }}"
+        sn_upsert_urgency: "{{ sn_urgency | default('medium') }}"
+        sn_upsert_cmdb_ci: "{{ _inc_hosts[0] if _inc_hosts | length == 1 else '' }}"
+        sn_upsert_correlation_id: "{{ sn_correlation_prefix }}:{{ aap_evidence.name }}:{{ aap_evidence.limit or 'all' }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ sn_incident_number }}"
+            status: changed
+            summary: >-
+              Incident {{ sn_incident_number }} {{ sn_incident_action }} for {{ aap_evidence.type }} {{ aap_evidence.id }} ({{ aap_evidence.name }});
+              {{ aap_evidence.failed_jobs | length }} failed job(s), {{ _inc_hosts | length }} failed host(s)
+            details: {incident: "{{ sn_incident_number }}", source_job: "{{ aap_evidence.id }}", failed_hosts: "{{ _inc_hosts }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Incident from job}

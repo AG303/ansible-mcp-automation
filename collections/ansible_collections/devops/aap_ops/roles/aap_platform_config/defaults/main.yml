@@ -1,0 +1,9 @@
+---
+# Location of the config-as-code vars inside the project checkout.
+aap_platform_config_vars_dir: "{{ playbook_dir }}/../../aap_config/vars"
+# Fields compared by config_drift for job templates.
+aap_platform_config_drift_fields: [playbook, job_type, inventory, project, execution_environment, survey_enabled, ask_limit_on_launch, ask_variables_on_launch]
+aap_platform_config_settings_categories: [system, jobs, authentication, logging, ui]
+aap_platform_config_instance_heartbeat_warn_min: 10
+# Name prefixes owned by this collection (used to detect unmanaged extras).
+aap_platform_config_managed_prefixes: ['MON - ', 'JOB - ', 'SEC - ', 'PLAT - ', 'PATCH - ', 'SN - ', 'WF - ']

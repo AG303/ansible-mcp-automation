@@ -1,0 +1,54 @@
+---
+- name: Open problems report
+  block:
+    - name: Query open problems
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: problem
+        sn_q_query: >-
+          active=true{{ ('^assignment_group.name=' ~ sn_assignment_group | trim) if sn_assignment_group | default('') | trim else '' }}^ORDERBYpriority^ORDERBYopened_at
+        sn_q_fields: [sys_id, number, short_description, state, priority, known_error, opened_at, sys_created_on, cmdb_ci, assignment_group]
+        sn_q_display: "all"
+        sn_q_limit: 200
+
+    - name: Keep problems
+      ansible.builtin.set_fact:
+        _prbs: "{{ sn_q_records }}"
+
+    - name: Linked incident counts
+      when: _prbs | length > 0
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: incident
+        sn_q_query: "problem_idIN{{ _prbs | map(attribute='sys_id.value') | join(',') }}"
+        sn_q_fields: [problem_id, active]
+        sn_q_limit: 5000
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _links: "{{ sn_q_records if _prbs | length > 0 else [] }}"
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for p in _prbs -%}
+          {%-   set n = _links | selectattr('problem_id', 'equalto', p.sys_id.value) | list -%}
+          {%-   set age = ((now().timestamp() - (((p.opened_at.value or p.sys_created_on.value) ~ ' +0000') | to_datetime('%Y-%m-%d %H:%M:%S %z')).timestamp()) / 86400) | int -%}
+          {%-   set _ = out.append({'host': p.number.value, 'status': 'warn' if age > 30 and p.known_error.value != 'true' else 'ok',
+                   'summary': p.priority.display_value ~ ' | ' ~ p.state.display_value ~ ' | ' ~ age ~ 'd old | ' ~ n | length ~ ' incident(s) ('
+                              ~ n | selectattr('active', 'equalto', 'true') | list | length ~ ' open)' ~ (' | known error' if p.known_error.value == 'true' else '')
+                              ~ ' | ' ~ p.short_description.display_value | truncate(90),
+                   'details': {'cmdb_ci': p.cmdb_ci.display_value, 'assignment_group': p.assignment_group.display_value, 'age_days': age}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: ok
+          summary: >-
+            {{ _prbs | length }} open problem(s){{ (' for ' ~ sn_assignment_group) if sn_assignment_group | default('') | trim else '' }};
+            {{ _rows | selectattr('status', 'equalto', 'warn') | list | length }} older than 30 days without a known error
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Problem list}

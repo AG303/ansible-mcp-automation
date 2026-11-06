@@ -1,0 +1,52 @@
+---
+- name: Time synchronization
+  block:
+    - name: Linux - chrony or timesyncd state
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        if command -v chronyc >/dev/null 2>&1 && chronyc -n tracking >/dev/null 2>&1; then
+          off=$(chronyc -n tracking | awk -F': ' '/System time/ {print $2}' | awk '{v=$1*1000; if ($3=="slow") v=-v; print v}')
+          src=$(chronyc -n tracking | awk -F': ' '/Reference ID/ {print $2}')
+          leap=$(chronyc -n tracking | awk -F': ' '/Leap status/ {print $2}')
+          printf '{"daemon":"chronyd","synced":%s,"offset_ms":%s,"source":"%s"}' "$( [ "$leap" = "Normal" ] && echo true || echo false )" "${off:-null}" "$src"
+        elif command -v timedatectl >/dev/null 2>&1; then
+          s=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
+          printf '{"daemon":"systemd-timesyncd","synced":%s,"offset_ms":null,"source":"%s"}' "$( [ "$s" = "yes" ] && echo true || echo false )" "$(timedatectl show-timesync -p ServerName --value 2>/dev/null)"
+        else
+          printf '{"daemon":"none","synced":false,"offset_ms":null,"source":""}'
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: _ts_linux
+
+    - name: Windows - w32time state
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $st = w32tm /query /status 2>&1 | Out-String
+        $src = if ($st -match 'Source:\s*(.+)') { $Matches[1].Trim() } else { '' }
+        $off = $null
+        $peer = if ($src -and $src -notmatch 'Local CMOS|Free-running') { ($src -split ',')[0] } else { $null }
+        if ($peer) { $line = w32tm /stripchart /computer:$peer /samples:1 /dataonly 2>&1 | Select-Object -Last 1
+          if ($line -match ',\s*([+-]?[0-9.]+)s') { $off = [math]::Round([double]$Matches[1]*1000,1) } }
+        @{ daemon = 'w32time'; synced = [bool]($src -and $src -notmatch 'Local CMOS|Free-running'); offset_ms = $off; source = $src } | ConvertTo-Json -Compress
+      changed_when: false
+      check_mode: false
+      register: _ts_win
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if not _ts.synced
+               else ('warn' if (_ts.offset_ms is number and (_ts.offset_ms | abs) > max_offset_ms | default(500) | float) else 'ok') }}
+          summary: >-
+            {{ _ts.daemon }} {{ 'synchronized' if _ts.synced else 'NOT synchronized' }}{{ (', offset ' ~ _ts.offset_ms ~ ' ms') if _ts.offset_ms is number else '' }}{{ (', source ' ~ _ts.source) if _ts.source else '' }}
+          details: "{{ _ts }}"
+      vars:
+        _ts: "{{ ((_ts_win if aap_ops_is_windows else _ts_linux).stdout | from_json) }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Time sync}

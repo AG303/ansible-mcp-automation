@@ -1,0 +1,46 @@
+---
+- name: Activity stream audit
+  block:
+    - name: Get activity stream
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/activity_stream/"
+        aap_api_query:
+          timestamp__gt: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(now().timestamp() - (hours | default(24) | int) * 3600, utc=true) }}"
+          order_by: -timestamp
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _events: >-
+          {%- set out = [] -%}
+          {%- for e in aap_api_results -%}
+          {%-   set _ = out.append({'actor': e.summary_fields.actor.username | default('system'), 'operation': e.operation,
+                                   'object': e.object1, 'ts': e.timestamp,
+                                   'sensitive': e.object1 in aap_security_audit_sensitive_objects or e.operation == 'delete'}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for g in _events | groupby('actor') -%}
+          {%-   set sens = g[1] | selectattr('sensitive') | list -%}
+          {%-   set ops = g[1] | map(attribute='operation') | list -%}
+          {%-   set _ = out.append({'host': g[0], 'status': 'warn' if sens else 'ok',
+                 'summary': (g[1] | length) ~ ' event(s): ' ~ ops | select('equalto', 'create') | list | length ~ ' create, '
+                            ~ ops | select('equalto', 'update') | list | length ~ ' update, ' ~ ops | select('equalto', 'delete') | list | length ~ ' delete; '
+                            ~ sens | length ~ ' security-sensitive',
+                 'details': {'sensitive': sens[:25] | map(attribute='operation') | zip(sens[:25] | map(attribute='object'), sens[:25] | map(attribute='ts')) | map('join', ' ') | list}}) -%}
+          {%- endfor -%}
+          {{ out | sort(attribute='status', reverse=true) }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _events | selectattr('sensitive') | list | length > 0 else 'ok' }}"
+          summary: >-
+            {{ _events | length }} activity event(s) in {{ hours | default(24) }}h by {{ _rows | length }} actor(s);
+            {{ _events | selectattr('sensitive') | list | length }} touched credentials, RBAC, users, settings or deletes
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Activity stream audit}

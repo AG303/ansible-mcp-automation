@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: DevOps Automation
+  description: Data-driven CIS Level 1 or DISA STIG baseline subset scan and remediation for RHEL, Ubuntu and Windows Server.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms:
+    - {name: EL, versions: ["8", "9", "10"]}
+    - {name: Ubuntu, versions: [jammy, noble]}
+    - {name: Windows, versions: ["2019", "2022", "2025"]}
+dependencies: []

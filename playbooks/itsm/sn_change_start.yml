@@ -1,0 +1,25 @@
+---
+# SN - Change start
+# Domain: ServiceNow Incident. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Writes ServiceNow records only. Moves an approved change to Implement and adds a work note linking the AAP
+# workflow job. Runs automatically after the approval node of every WF workflow.
+# Survey variables: sn_change_number
+
+- name: SN - Change start
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Change start
+  tasks:
+    - name: ServiceNow connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: Run sn_change/start
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_change
+        tasks_from: start
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

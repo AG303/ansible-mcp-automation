@@ -1,0 +1,24 @@
+---
+# PLAT - Configuration drift check
+# Domain: Platform Configuration. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Compares this project's config-as-code (aap_config/vars) with what is live in AAP and lists missing
+# or different objects. Returns aap_ops_result.
+
+- name: PLAT - Configuration drift check
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PLAT - Configuration drift check
+  tasks:
+    - name: AAP API connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+    - name: Run aap_platform_config/config_drift
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_platform_config
+        tasks_from: config_drift
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

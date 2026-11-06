@@ -1,0 +1,4 @@
+---
+sn_cmdb_class_map: {rhel: cmdb_ci_linux_server, ubuntu: cmdb_ci_linux_server, windows: cmdb_ci_win_server}
+sn_cmdb_compare_fields: [os, os_version, serial_number, ip_address, cpu_count, ram, fqdn]
+sn_cmdb_max_writes: 200

@@ -1,0 +1,59 @@
+---
+- name: SELinux, AppArmor and Defender status
+  block:
+    - name: RHEL - SELinux
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.shell: |
+        cur=$(getenforce 2>/dev/null || echo Disabled)
+        cfg=$(awk -F= '/^SELINUX=/ {print $2}' /etc/selinux/config 2>/dev/null)
+        pol=$(awk -F= '/^SELINUXTYPE=/ {print $2}' /etc/selinux/config 2>/dev/null)
+        denials=$(ausearch -m AVC -ts today 2>/dev/null | grep -c 'type=AVC' || true)
+        printf '{"mechanism":"selinux","mode":"%s","configured":"%s","policy":"%s","avc_denials_today":%s}' "$cur" "$cfg" "$pol" "${denials:-0}"
+      args:
+        executable: /bin/bash
+      register: _mac_rhel
+      changed_when: false
+      check_mode: false
+
+    - name: Ubuntu - AppArmor
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.shell: |
+        if aa-status --enabled 2>/dev/null; then en=true; else en=false; fi
+        enf=$(aa-status --enforced 2>/dev/null || echo 0); cmp=$(aa-status --complaining 2>/dev/null || echo 0)
+        printf '{"mechanism":"apparmor","enabled":%s,"profiles_enforced":%s,"profiles_complain":%s}' "$en" "${enf:-0}" "${cmp:-0}"
+      args:
+        executable: /bin/bash
+      register: _mac_ubuntu
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - Microsoft Defender
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        try { $s = Get-MpComputerStatus -ErrorAction Stop
+          @{ mechanism = 'defender'; antivirus_enabled = $s.AntivirusEnabled; realtime = $s.RealTimeProtectionEnabled
+             tamper_protected = $s.IsTamperProtected; signature_age_days = $s.AntivirusSignatureAge; engine = $s.AMEngineVersion
+             last_quick_scan_days = $s.QuickScanAge } | ConvertTo-Json -Compress
+        } catch { @{ mechanism = 'defender'; antivirus_enabled = $false; realtime = $false; error = "$_" } | ConvertTo-Json -Compress }
+      register: _mac_win
+      changed_when: false
+      check_mode: false
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {%- if aap_ops_os == 'rhel' -%}{{ 'ok' if _m.mode == 'Enforcing' else ('warn' if _m.mode == 'Permissive' else 'fail') }}
+            {%- elif aap_ops_os == 'ubuntu' -%}{{ 'ok' if _m.enabled and _m.profiles_complain | int == 0 else ('warn' if _m.enabled else 'fail') }}
+            {%- else -%}{{ 'fail' if not _m.realtime else ('warn' if (_m.signature_age_days | default(0) | int) > 3 else 'ok') }}{%- endif -%}
+          summary: >-
+            {%- if aap_ops_os == 'rhel' -%}SELinux {{ _m.mode }} (config {{ _m.configured }}, {{ _m.policy }}), {{ _m.avc_denials_today }} AVC denials today
+            {%- elif aap_ops_os == 'ubuntu' -%}AppArmor {{ 'enabled' if _m.enabled else 'DISABLED' }}, {{ _m.profiles_enforced }} enforced / {{ _m.profiles_complain }} complain profiles
+            {%- else -%}Defender real-time {{ 'on' if _m.realtime else 'OFF' }}, signatures {{ _m.signature_age_days | default('?') }} day(s) old{%- endif -%}
+          details: "{{ _m }}"
+      vars:
+        _m: "{{ ((_mac_win if aap_ops_is_windows else (_mac_rhel if aap_ops_os == 'rhel' else _mac_ubuntu)).stdout) | from_json }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: MAC status}

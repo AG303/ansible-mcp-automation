@@ -1,0 +1,62 @@
+---
+# SN - Incident diagnostics
+# Domain: ServiceNow Incident, Change and Problem. Handwritten hybrid (localhost -> incident hosts -> localhost).
+# Read-only on hosts. Runs health, disk, service and log checks on the incident's hosts and posts the findings as a work note.
+# Survey variables: sn_incident_number, service_names, hours
+
+- name: SN - Incident diagnostics - resolve incident targets
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Incident diagnostics
+  tasks:
+    - name: ServiceNow connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: Read the incident and map its CI / correlation ID to inventory hosts
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_incident
+        tasks_from: resolve_targets
+    - name: Put the incident hosts into an in-memory group
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: sn_incident_targets
+      loop: "{{ _sn_targets }}"
+      changed_when: false
+
+- name: SN - Incident diagnostics - run on incident hosts
+  hosts: sn_incident_targets
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: SN - Incident diagnostics
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run sn_incident/diagnose_host
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_incident
+        tasks_from: diagnose_host
+
+- name: SN - Incident diagnostics - update incident and report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Incident diagnostics
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default(hostvars['localhost']._sn_targets | default([])) }}"
+  tasks:
+    - name: ServiceNow connection (role defaults are play-scoped)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: Write results back to the incident
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_incident
+        tasks_from: post_diagnostics
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

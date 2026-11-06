@@ -1,0 +1,54 @@
+---
+- name: Enable or disable schedules
+  block:
+    - name: Validate input
+      ansible.builtin.assert:
+        that:
+          - name_filter | default('') | trim | length >= 3
+          - desired_state | default('') in ['enabled', 'disabled']
+        fail_msg: name_filter (min 3 chars) and desired_state (enabled|disabled) are required.
+        quiet: true
+
+    - name: Get matching schedules
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/schedules/"
+        aap_api_query: {name__icontains: "{{ name_filter | trim }}"}
+
+    - name: Select schedules needing change
+      ansible.builtin.set_fact:
+        _toggle: >-
+          {{ aap_api_results | selectattr('enabled', 'equalto', desired_state != 'enabled')
+             | rejectattr('name', 'search', aap_jobs_protected_name_regex) | list }}
+
+    - name: Refuse to change more than the safety cap
+      ansible.builtin.assert:
+        that: _toggle | length <= aap_jobs_max_toggle | int
+        fail_msg: "{{ _toggle | length }} schedules matched; cap is {{ aap_jobs_max_toggle }}."
+        quiet: true
+
+    - name: Patch schedules
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/schedules/{{ item.id }}/"
+        aap_api_method: PATCH
+        aap_api_body: {enabled: "{{ desired_state == 'enabled' }}"}
+      loop: "{{ _toggle }}"
+      loop_control: {label: "{{ item.name }}"}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: >-
+          {%- set out = [{'host': 'summary', 'status': 'changed' if _toggle else 'ok',
+               'summary': (aap_api_results | length) ~ ' matched, ' ~ (_toggle | length) ~ ' set to ' ~ desired_state, 'details': {}}] -%}
+          {%- for s in aap_api_results -%}
+          {%-   set ch = s.id in (_toggle | map(attribute='id') | list) -%}
+          {%-   set _ = out.append({'host': s.name, 'status': 'changed' if ch else 'ok',
+                 'summary': ('now ' ~ desired_state) if ch else ('already ' ~ ('enabled' if s.enabled else 'disabled') ~ (' (protected)' if s.name is search(aap_jobs_protected_name_regex) else '')),
+                 'details': {'id': s.id}}) -%}
+          {%- endfor -%}
+          {{ out }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Schedule toggle}

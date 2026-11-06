@@ -1,0 +1,60 @@
+---
+# Collects failure evidence for a job or workflow job.
+# Input:  aap_evidence_job_id (int)
+# Output: aap_evidence {id, type, name, status, limit, started, finished, url,
+#                       nodes: [{id, name, status, type}],
+#                       failed_jobs: [{id, name, status, failed_hosts, failed_tasks, result}]}
+- name: "Identify unified job {{ aap_evidence_job_id }}"
+  ansible.builtin.include_tasks: get.yml
+  vars:
+    aap_api_path: "{{ aap_api_c }}/unified_jobs/"
+    aap_api_query: {id: "{{ aap_evidence_job_id | int }}"}
+
+- name: Require the job
+  ansible.builtin.assert:
+    that: aap_api_results | length == 1
+    fail_msg: "AAP job {{ aap_evidence_job_id }} not found (or not visible to this credential)."
+    quiet: true
+
+- name: Record top-level job
+  ansible.builtin.set_fact:
+    _ev_top: "{{ aap_api_results[0] }}"
+
+- name: Get workflow nodes
+  when: _ev_top.type == 'workflow_job'
+  ansible.builtin.include_tasks: get.yml
+  vars:
+    aap_api_path: "{{ aap_api_c }}/workflow_jobs/{{ _ev_top.id }}/workflow_nodes/"
+
+- name: Determine jobs to inspect
+  ansible.builtin.set_fact:
+    _ev_nodes: >-
+      {{ (aap_api_results if _ev_top.type == 'workflow_job' else [])
+         | selectattr('summary_fields.job', 'defined') | map(attribute='summary_fields.job') | list }}
+    _ev_jobs: >-
+      {{ ((aap_api_results if _ev_top.type == 'workflow_job' else [])
+          | selectattr('summary_fields.job', 'defined') | map(attribute='summary_fields.job')
+          | selectattr('type', 'equalto', 'job') | selectattr('status', 'in', ['failed', 'error']) | map(attribute='id') | list)
+         if _ev_top.type == 'workflow_job' else [_ev_top.id] }}
+
+- name: Collect per-job evidence
+  ansible.builtin.include_tasks: _job_evidence_one.yml
+  loop: "{{ _ev_jobs[:10] }}"
+  loop_control: {loop_var: _ev_job_id}
+
+- name: Publish evidence
+  ansible.builtin.set_fact:
+    aap_evidence:
+      id: "{{ _ev_top.id }}"
+      type: "{{ _ev_top.type }}"
+      name: "{{ _ev_top.name }}"
+      status: "{{ _ev_top.status }}"
+      limit: "{{ _ev_top.limit | default('') }}"
+      started: "{{ _ev_top.started }}"
+      finished: "{{ _ev_top.finished }}"
+      url: "{{ _aap_api_base }}/execution/jobs/{{ 'workflow' if _ev_top.type == 'workflow_job' else 'playbook' }}/{{ _ev_top.id }}/output"
+      nodes: >-
+          {%- set rows = [] -%}
+          {%- for o in _ev_nodes -%}{%- set _ = rows.append(o | dict2items | selectattr('key', 'in', ['id', 'name', 'status', 'type']) | items2dict) -%}{%- endfor -%}
+          {{ rows }}
+      failed_jobs: "{{ _ev_collected | default([]) }}"

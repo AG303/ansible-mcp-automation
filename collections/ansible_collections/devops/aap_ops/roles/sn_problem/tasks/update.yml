@@ -1,0 +1,53 @@
+---
+- name: Update problem
+  block:
+    - name: Look up problem
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: lookup}
+      vars: {sn_lookup_table: problem, sn_lookup_number: "{{ sn_problem_number }}"}
+
+    - name: Validate resolution input
+      when: sn_problem_state | default('unchanged') in ['resolved', 'closed']
+      ansible.builtin.assert:
+        that:
+          - sn_resolution_code | default('') in sn_problem_resolution_codes
+          - sn_resolution_code != 'fix_applied' or ((sn_fix_notes | default('') | trim or sn_record.fix_notes | default('')) | length > 0)
+          - sn_resolution_code != 'fix_applied' or ((sn_cause_notes | default('') | trim or sn_record.cause_notes | default('')) | length > 0)
+        fail_msg: Resolving with fix_applied needs cause and fix notes (new or already on the problem).
+        quiet: true
+
+    - name: Build payload
+      ansible.builtin.set_fact:
+        _upd: >-
+          {{ {}
+             | combine({'state': sn_problem_state_map[sn_problem_state]} if sn_problem_state | default('unchanged') != 'unchanged' else {})
+             | combine({'resolution_code': sn_resolution_code} if sn_problem_state | default('unchanged') in ['resolved', 'closed'] else {})
+             | combine({'cause_notes': sn_cause_notes} if sn_cause_notes | default('') | trim else {})
+             | combine({'fix_notes': sn_fix_notes} if sn_fix_notes | default('') | trim else {})
+             | combine({'work_notes': 'Updated by AAP job ' ~ (tower_job_id | default('local') | string) ~ '.'}) }}
+
+    - name: Require a change
+      ansible.builtin.assert:
+        that: _upd | length > 1
+        fail_msg: Nothing to update - set sn_problem_state, sn_cause_notes or sn_fix_notes.
+        quiet: true
+
+    - name: Patch problem
+      servicenow.itsm.api:
+        resource: problem
+        action: patch
+        sys_id: "{{ sn_record.sys_id }}"
+        data: "{{ _upd }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ sn_record.number }}"
+            status: changed
+            summary: >-
+              {{ sn_record.number }} updated ({{ _upd.keys() | reject('equalto', 'work_notes') | join(', ') }});
+              state {{ sn_record_display.state }} -> {{ sn_problem_state if sn_problem_state | default('unchanged') != 'unchanged' else sn_record_display.state }}
+            details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Update problem}

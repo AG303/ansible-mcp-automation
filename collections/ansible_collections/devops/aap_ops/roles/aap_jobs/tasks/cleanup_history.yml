@@ -1,0 +1,45 @@
+---
+- name: Clean up job history
+  block:
+    - name: Validate retention
+      ansible.builtin.assert:
+        that: keep_days | default(90) | int >= 7
+        fail_msg: keep_days must be at least 7.
+        quiet: true
+
+    - name: Find cleanup system job template
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/system_job_templates/"
+        aap_api_query: {job_type: cleanup_jobs}
+
+    - name: Require the cleanup template
+      ansible.builtin.assert:
+        that: aap_api_results | length > 0
+        fail_msg: No cleanup_jobs system job template found (requires system administrator credential).
+        quiet: true
+
+    - name: Launch cleanup
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/system_job_templates/{{ aap_api_results[0].id }}/launch/"
+        aap_api_method: POST
+        aap_api_body: {extra_vars: {days: "{{ keep_days | default(90) | int }}"}}
+        aap_api_status: [201, 202]
+
+    - name: Wait for cleanup
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: wait_job}
+      vars:
+        aap_api_job_path: "{{ aap_api_c }}/system_jobs/{{ aap_api_response.json.system_job | default(aap_api_response.json.id) }}/"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ aap_api_job.name }}"
+            status: "{{ 'changed' if aap_api_job.status == 'successful' else 'fail' }}"
+            summary: "Cleanup of job history older than {{ keep_days | default(90) }} days {{ aap_api_job.status }} (system job {{ aap_api_job.id }})"
+            details: {system_job_id: "{{ aap_api_job.id }}", result_stdout: "{{ aap_api_job.result_stdout | default('') | truncate(1500) }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Cleanup job history}

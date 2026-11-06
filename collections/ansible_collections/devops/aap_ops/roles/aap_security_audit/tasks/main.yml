@@ -1,0 +1,3 @@
+---
+- name: Default to credential audit
+  ansible.builtin.include_tasks: credential.yml

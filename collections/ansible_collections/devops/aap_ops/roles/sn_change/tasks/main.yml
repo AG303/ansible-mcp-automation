@@ -1,0 +1,3 @@
+---
+- name: Default to change gate
+  ansible.builtin.include_tasks: gate.yml

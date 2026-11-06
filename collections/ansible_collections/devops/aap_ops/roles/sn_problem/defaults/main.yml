@@ -1,0 +1,7 @@
+---
+# Uses the Table API (problem, problem_task, incident) through servicenow.itsm.api /
+# api_info - not servicenow.itsm.problem, which needs the x_rhtpp_ansible scoped app.
+sn_problem_trend_max_incidents: 2000
+sn_problem_trend_max_create: 10
+sn_problem_rca_max_jobs: 5
+sn_problem_resolution_codes: [fix_applied, risk_accepted, duplicate, canceled]

@@ -1,0 +1,29 @@
+---
+argument_specs:
+  main:
+    short_description: Validate the ServiceNow credential environment
+    options:
+      sn_host: {type: str, description: "ServiceNow instance URL (SN_HOST)"}
+      sn_username: {type: str, description: "ServiceNow user (SN_USERNAME)"}
+  incident_upsert:
+    short_description: Create an incident or add a work note to the active incident with the same correlation ID
+    options:
+      sn_upsert_correlation_id: {type: str, required: true, description: "Correlation ID used for de-duplication"}
+      sn_upsert_short_description: {type: str, required: true, description: "Short description"}
+      sn_upsert_description: {type: str, default: "", description: "Description"}
+      sn_upsert_work_note: {type: str, default: "", description: "Work note added on create or update"}
+      sn_upsert_impact: {type: str, default: medium, choices: [high, medium, low], description: "Impact"}
+      sn_upsert_urgency: {type: str, default: medium, choices: [high, medium, low], description: "Urgency"}
+      sn_upsert_assignment_group: {type: str, default: "", description: "Assignment group name"}
+      sn_upsert_cmdb_ci: {type: str, default: "", description: "Configuration item name"}
+  work_note:
+    short_description: Add a work note to any task-based record
+    options:
+      sn_note_table: {type: str, required: true, description: "Table, e.g. incident, change_request, problem"}
+      sn_note_number: {type: str, required: true, description: "Record number"}
+      sn_note_text: {type: str, required: true, description: "Work note text"}
+  lookup:
+    short_description: Fetch one record by number into sn_record
+    options:
+      sn_lookup_table: {type: str, required: true, description: "Table name"}
+      sn_lookup_number: {type: str, required: true, description: "Record number"}

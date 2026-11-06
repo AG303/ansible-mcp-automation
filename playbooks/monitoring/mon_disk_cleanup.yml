@@ -1,0 +1,32 @@
+---
+# MON - Disk cleanup
+# Domain: Server Monitoring. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES SYSTEMS. Cleans package caches, rotated/compressed logs, old journal entries and temp files older than
+# N days. Use the WF workflow (approval required).
+# Survey variables: older_than_days, journal_max_size
+
+- name: MON - Disk cleanup
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: MON - Disk cleanup
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_monitor/disk_cleanup
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_monitor
+        tasks_from: disk_cleanup
+
+- name: Report - MON - Disk cleanup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: MON - Disk cleanup
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

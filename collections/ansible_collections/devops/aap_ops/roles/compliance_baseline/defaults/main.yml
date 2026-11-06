@@ -1,0 +1,40 @@
+---
+# Profile-specific values. CIS values follow CIS Level 1 Server guidance; STIG
+# values follow the stricter DISA STIG settings. Override any key per group.
+compliance_baseline_values:
+  cis:
+    ssh_max_auth_tries: 4
+    ssh_client_alive_interval: 900
+    ssh_login_grace_time: 60
+    pass_min_len: 14
+    pass_max_days: 365
+    pass_min_days: 1
+    lockout_attempts: 5
+    lockout_unlock_time: 900
+    shell_timeout: 900
+    win_min_password_length: 14
+    win_max_password_age: 365
+    win_lockout_threshold: 5
+    win_lockout_duration: 15
+    win_security_log_kb: 196608
+  stig:
+    ssh_max_auth_tries: 3
+    ssh_client_alive_interval: 600
+    ssh_login_grace_time: 60
+    pass_min_len: 15
+    pass_max_days: 60
+    pass_min_days: 1
+    lockout_attempts: 3
+    lockout_unlock_time: 0
+    shell_timeout: 600
+    win_min_password_length: 14
+    win_max_password_age: 60
+    win_lockout_threshold: 3
+    win_lockout_duration: 15
+    win_security_log_kb: 1024000
+# Controls never remediated automatically (still scanned).
+compliance_baseline_skip_remediation: []
+compliance_baseline_sshd_dropin: /etc/ssh/sshd_config.d/01-aap-ops-baseline.conf
+compliance_baseline_sysctl_file: /etc/sysctl.d/60-aap-ops-baseline.conf
+compliance_baseline_audit_rules_file: /etc/audit/rules.d/50-aap-ops-baseline.rules
+compliance_baseline_check_timeout: 30

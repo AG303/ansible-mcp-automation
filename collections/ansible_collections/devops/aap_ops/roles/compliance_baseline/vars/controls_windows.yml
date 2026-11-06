@@ -1,0 +1,160 @@
+---
+# Windows control catalogue. check: PowerShell expression returning $true when compliant.
+# Helpers available to checks: $sec (secedit [System Access]/[Event Audit] values),
+# $audit (auditpol subcategory -> setting), Reg 'path' 'name' (value or $null).
+# fix.type: regedit | secpol | auditpol | firewall | defender | service_disabled | manual
+compliance_baseline_windows_controls:
+  - id: W-ACC-01
+    title: Minimum password length
+    section: "CIS 1.1 Minimum password length / STIG password length"
+    profiles: [cis, stig]
+    severity: medium
+    check: "[int]$sec['MinimumPasswordLength'] -ge {{ _v.win_min_password_length }}"
+    fix: {type: secpol, section: System Access, key: MinimumPasswordLength, value: "{{ _v.win_min_password_length }}"}
+  - id: W-ACC-02
+    title: Maximum password age
+    section: "CIS 1.1 Maximum password age / STIG password lifetime"
+    profiles: [cis, stig]
+    severity: medium
+    check: "$a = [int]$sec['MaximumPasswordAge']; $a -gt 0 -and $a -le {{ _v.win_max_password_age }}"
+    fix: {type: secpol, section: System Access, key: MaximumPasswordAge, value: "{{ _v.win_max_password_age }}"}
+  - id: W-ACC-03
+    title: Password complexity enabled
+    section: "CIS 1.1 Password must meet complexity requirements"
+    profiles: [cis, stig]
+    severity: medium
+    check: "[int]$sec['PasswordComplexity'] -eq 1"
+    fix: {type: secpol, section: System Access, key: PasswordComplexity, value: "1"}
+  - id: W-ACC-04
+    title: Account lockout threshold
+    section: "CIS 1.2 Account lockout threshold / STIG bad logon attempts"
+    profiles: [cis, stig]
+    severity: medium
+    check: "$t = [int]$sec['LockoutBadCount']; $t -gt 0 -and $t -le {{ _v.win_lockout_threshold }}"
+    fix: {type: secpol, section: System Access, key: LockoutBadCount, value: "{{ _v.win_lockout_threshold }}"}
+  - id: W-ACC-05
+    title: Account lockout duration
+    section: "CIS 1.2 Account lockout duration"
+    profiles: [cis, stig]
+    severity: low
+    check: "[int]$sec['LockoutDuration'] -ge {{ _v.win_lockout_duration }} -or [int]$sec['LockoutDuration'] -eq -1"
+    fix: {type: secpol, section: System Access, key: LockoutDuration, value: "{{ _v.win_lockout_duration }}"}
+  - id: W-ACC-06
+    title: Guest account disabled
+    section: "CIS 2.3 Accounts Guest account status / STIG guest account"
+    profiles: [cis, stig]
+    severity: high
+    check: "[int]$sec['EnableGuestAccount'] -eq 0"
+    fix: {type: secpol, section: System Access, key: EnableGuestAccount, value: "0"}
+  - id: W-NET-01
+    title: SMBv1 server disabled
+    section: "CIS 18.4 SMB v1 / STIG SMBv1"
+    profiles: [cis, stig]
+    severity: high
+    check: "-not (Get-SmbServerConfiguration).EnableSMB1Protocol"
+    fix: {type: regedit, path: 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters', name: SMB1, data: 0, regtype: dword}
+  - id: W-NET-02
+    title: Windows Firewall enabled on all profiles
+    section: "CIS 9 Windows Defender Firewall state / STIG firewall"
+    profiles: [cis, stig]
+    severity: high
+    check: "@(Get-NetFirewallProfile | Where-Object { -not $_.Enabled }).Count -eq 0"
+    fix: {type: firewall}
+  - id: W-NET-03
+    title: RDP requires Network Level Authentication
+    section: "CIS 18.10 RDS require NLA / STIG RDP NLA"
+    profiles: [cis, stig]
+    severity: medium
+    check: "(Reg 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' 'UserAuthentication') -eq 1"
+    fix: {type: regedit, path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp', name: UserAuthentication, data: 1, regtype: dword}
+  - id: W-NET-04
+    title: WinRM client and service Basic auth disabled
+    section: "CIS 18.10 WinRM Allow Basic authentication / STIG WinRM basic"
+    profiles: [cis, stig]
+    severity: medium
+    check: "(Reg 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Service' 'AllowBasic') -eq 0"
+    fix: {type: regedit, path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service', name: AllowBasic, data: 0, regtype: dword}
+  - id: W-SEC-01
+    title: LM hash storage disabled
+    section: "CIS 2.3 Network security Do not store LAN Manager hash / STIG LM hash"
+    profiles: [cis, stig]
+    severity: high
+    check: "(Reg 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' 'NoLMHash') -eq 1"
+    fix: {type: regedit, path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa', name: NoLMHash, data: 1, regtype: dword}
+  - id: W-SEC-02
+    title: LAN Manager authentication level NTLMv2 only
+    section: "CIS 2.3 LAN Manager authentication level / STIG LmCompatibilityLevel"
+    profiles: [cis, stig]
+    severity: high
+    check: "(Reg 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' 'LmCompatibilityLevel') -eq 5"
+    fix: {type: regedit, path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa', name: LmCompatibilityLevel, data: 5, regtype: dword}
+  - id: W-SEC-03
+    title: Anonymous SAM enumeration restricted
+    section: "CIS 2.3 Network access anonymous enumeration of SAM accounts"
+    profiles: [cis, stig]
+    severity: medium
+    check: "(Reg 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' 'RestrictAnonymousSAM') -eq 1"
+    fix: {type: regedit, path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa', name: RestrictAnonymousSAM, data: 1, regtype: dword}
+  - id: W-SEC-04
+    title: User Account Control enabled
+    section: "CIS 2.3 UAC Run all administrators in Admin Approval Mode / STIG UAC"
+    profiles: [cis, stig]
+    severity: high
+    check: "(Reg 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' 'EnableLUA') -eq 1"
+    fix: {type: regedit, path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', name: EnableLUA, data: 1, regtype: dword}
+  - id: W-SEC-05
+    title: AutoPlay disabled for all drives
+    section: "CIS 18.10 Turn off AutoPlay / STIG autoplay"
+    profiles: [cis, stig]
+    severity: medium
+    check: "(Reg 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer' 'NoDriveTypeAutoRun') -eq 255"
+    fix: {type: regedit, path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer', name: NoDriveTypeAutoRun, data: 255, regtype: dword}
+  - id: W-SEC-06
+    title: Microsoft Defender real-time protection on
+    section: "CIS 18.10 Defender real-time protection / STIG antivirus"
+    profiles: [cis, stig]
+    severity: high
+    check: "(Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled"
+    fix: {type: defender}
+  - id: W-AUD-01
+    title: Audit Logon success and failure
+    section: "CIS 17.5 Audit Logon / STIG logon auditing"
+    profiles: [cis, stig]
+    severity: medium
+    check: "$audit['Logon'] -eq 'Success and Failure'"
+    fix: {type: auditpol, subcategory: Logon, audit_type: [success, failure]}
+  - id: W-AUD-02
+    title: Audit Account Lockout failure
+    section: "CIS 17.5 Audit Account Lockout"
+    profiles: [cis, stig]
+    severity: low
+    check: "$audit['Account Lockout'] -match 'Failure'"
+    fix: {type: auditpol, subcategory: Account Lockout, audit_type: [failure]}
+  - id: W-AUD-03
+    title: Audit User Account Management success and failure
+    section: "CIS 17.2 Audit User Account Management / STIG account management"
+    profiles: [cis, stig]
+    severity: medium
+    check: "$audit['User Account Management'] -eq 'Success and Failure'"
+    fix: {type: auditpol, subcategory: User Account Management, audit_type: [success, failure]}
+  - id: W-AUD-04
+    title: Audit Policy Change success
+    section: "CIS 17.7 Audit Audit Policy Change"
+    profiles: [cis, stig]
+    severity: medium
+    check: "$audit['Audit Policy Change'] -match 'Success'"
+    fix: {type: auditpol, subcategory: Audit Policy Change, audit_type: [success, failure]}
+  - id: W-AUD-05
+    title: Audit Sensitive Privilege Use
+    section: "STIG Sensitive Privilege Use auditing"
+    profiles: [stig]
+    severity: low
+    check: "$audit['Sensitive Privilege Use'] -eq 'Success and Failure'"
+    fix: {type: auditpol, subcategory: Sensitive Privilege Use, audit_type: [success, failure]}
+  - id: W-LOG-01
+    title: Security event log size
+    section: "CIS 18.9 Security log maximum size / STIG security log size"
+    profiles: [cis, stig]
+    severity: low
+    check: "(Get-WinEvent -ListLog Security).MaximumSizeInBytes -ge {{ _v.win_security_log_kb * 1024 }}"
+    fix: {type: regedit, path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\Security', name: MaxSize, data: "{{ _v.win_security_log_kb }}", regtype: dword}

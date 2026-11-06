@@ -1,0 +1,45 @@
+---
+- name: System inventory
+  block:
+    - name: Windows - last boot and installed roles
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $os = Get-CimInstance Win32_OperatingSystem
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $bios = Get-CimInstance Win32_BIOS
+        @{ last_boot = $os.LastBootUpTime.ToString('s'); build = $os.BuildNumber; manufacturer = $cs.Manufacturer; model = $cs.Model; serial = $bios.SerialNumber } | ConvertTo-Json -Compress
+      changed_when: false
+      check_mode: false
+      register: _inv_win
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: ok
+          summary: >-
+            {{ ansible_distribution | default('') }} {{ ansible_distribution_version | default('') }},
+            {{ ansible_processor_vcpus | default(ansible_processor_count | default('?')) }} vCPU,
+            {{ ((ansible_memtotal_mb | default(0)) / 1024) | round(1) }} GB RAM,
+            {{ ansible_virtualization_type | default('unknown') }} {{ ansible_virtualization_role | default('') }}
+          details:
+            fqdn: "{{ ansible_fqdn | default(ansible_hostname | default(inventory_hostname)) }}"
+            os: "{{ ansible_distribution | default('') }} {{ ansible_distribution_version | default('') }}"
+            kernel: "{{ ansible_kernel | default('') }}"
+            build: "{{ (_inv_win.stdout | from_json).build if aap_ops_is_windows else ansible_kernel | default('') }}"
+            architecture: "{{ ansible_architecture | default('') }}"
+            vcpus: "{{ ansible_processor_vcpus | default(ansible_processor_count | default(0)) }}"
+            cpu_model: "{{ (ansible_processor | default([]) | select('search', '[A-Za-z]{3,}') | list | last) | default('') }}"
+            memory_mb: "{{ ansible_memtotal_mb | default(0) }}"
+            disks: "{{ ansible_mounts | default([]) | map(attribute='mount') | list if not aap_ops_is_windows else [] }}"
+            ipv4: "{{ ansible_all_ipv4_addresses | default(ansible_ip_addresses | default([])) }}"
+            virtualization: "{{ ansible_virtualization_type | default('') }}/{{ ansible_virtualization_role | default('') }}"
+            manufacturer: "{{ (_inv_win.stdout | from_json).manufacturer if aap_ops_is_windows else ansible_system_vendor | default('') }}"
+            model: "{{ (_inv_win.stdout | from_json).model if aap_ops_is_windows else ansible_product_name | default('') }}"
+            serial: "{{ (_inv_win.stdout | from_json).serial if aap_ops_is_windows else ansible_product_serial | default('') }}"
+            last_boot: >-
+              {{ (_inv_win.stdout | from_json).last_boot if aap_ops_is_windows
+                 else ('%Y-%m-%dT%H:%M:%S' | ansible.builtin.strftime(ansible_date_time.epoch | int - ansible_uptime_seconds | default(0) | int)) }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: System inventory}

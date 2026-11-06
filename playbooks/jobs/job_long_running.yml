@@ -1,0 +1,25 @@
+---
+# JOB - Long-running jobs
+# Domain: Job Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Running jobs exceeding N minutes or the template's typical duration multiplied by a factor. Returns
+# aap_ops_result.
+# Survey variables: max_minutes
+
+- name: JOB - Long-running jobs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: JOB - Long-running jobs
+  tasks:
+    - name: AAP API connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+    - name: Run aap_jobs/long_running
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_jobs
+        tasks_from: long_running
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

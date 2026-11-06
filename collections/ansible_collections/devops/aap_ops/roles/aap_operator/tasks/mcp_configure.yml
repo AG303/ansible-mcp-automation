@@ -1,0 +1,58 @@
+---
+- name: Enable or disable the MCP server
+  block:
+    - name: Get AAP CR
+      ansible.builtin.include_tasks: _get_cr.yml
+
+    - name: Patch spec.mcp.disabled
+      kubernetes.core.k8s:
+        state: patched
+        api_version: "{{ aap_operator_api_version }}"
+        kind: "{{ aap_operator_kind }}"
+        name: "{{ aap_cr_name }}"
+        namespace: "{{ aap_namespace }}"
+        merge_type: merge
+        definition:
+          spec:
+            mcp:
+              disabled: "{{ not (mcp_enabled | default(true) | bool) }}"
+      register: _patch
+
+    - name: Wait for the operator to reconcile
+      when: _patch is changed
+      kubernetes.core.k8s_info:
+        api_version: "{{ aap_operator_api_version }}"
+        kind: "{{ aap_operator_kind }}"
+        name: "{{ aap_cr_name }}"
+        namespace: "{{ aap_namespace }}"
+        wait: true
+        wait_condition: {type: Successful, status: "True"}
+        wait_timeout: "{{ aap_operator_wait_timeout }}"
+      register: _wait
+
+    - name: Wait for the MCP route
+      when: mcp_enabled | default(true) | bool
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "{{ aap_namespace }}"
+      register: _routes
+      until: _routes.resources | selectattr('metadata.name', 'search', '-mcp$') | list | length > 0
+      retries: 30
+      delay: 20
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ aap_operator_kind }}/{{ aap_cr_name }}"
+            status: "{{ 'changed' if _patch is changed else 'ok' }}"
+            summary: >-
+              MCP server {{ 'enabled' if mcp_enabled | default(true) | bool else 'disabled' }}{{ '' if _patch is changed else ' (already in desired state)' }}
+              {{- ('; endpoint https://' ~ (_r | first).spec.host ~ '/mcp') if _r else '' }}
+            details: {mcp_url: "{{ ('https://' ~ (_r | first).spec.host ~ '/mcp') if _r else '' }}"}
+      vars:
+        _r: "{{ (_routes.resources | default([])) | selectattr('metadata.name', 'search', '-mcp$') | list }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: MCP configure}

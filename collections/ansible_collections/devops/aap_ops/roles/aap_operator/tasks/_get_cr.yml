@@ -1,0 +1,20 @@
+---
+# Output: _aap_cr (resource dict), _aap_cr_conditions (list)
+- name: "Get {{ aap_operator_kind }} {{ aap_cr_name }}"
+  kubernetes.core.k8s_info:
+    api_version: "{{ aap_operator_api_version }}"
+    kind: "{{ aap_operator_kind }}"
+    name: "{{ aap_cr_name }}"
+    namespace: "{{ aap_namespace }}"
+  register: _aap_cr_info
+
+- name: Require the CR
+  ansible.builtin.assert:
+    that: _aap_cr_info.resources | length == 1
+    fail_msg: "{{ aap_operator_kind }} '{{ aap_cr_name }}' not found in namespace '{{ aap_namespace }}'."
+    quiet: true
+
+- name: Record CR
+  ansible.builtin.set_fact:
+    _aap_cr: "{{ _aap_cr_info.resources[0] }}"
+    _aap_cr_conditions: "{{ _aap_cr_info.resources[0].status.conditions | default([]) }}"

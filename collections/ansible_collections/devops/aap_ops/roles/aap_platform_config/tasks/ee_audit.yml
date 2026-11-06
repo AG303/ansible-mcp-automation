@@ -1,0 +1,48 @@
+---
+- name: Execution environment audit
+  block:
+    - name: Get execution environments
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/execution_environments/"
+
+    - name: Keep EEs
+      ansible.builtin.set_fact:
+        _ees: "{{ aap_api_results }}"
+
+    - name: Get job templates
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/job_templates/"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for e in _ees -%}
+          {%-   set users = aap_api_results | selectattr('execution_environment', 'equalto', e.id) | map(attribute='name') | list -%}
+          {%-   set tag = e.image.split('@')[0].split('/')[-1].split(':')[1] | default('') if ':' in e.image.split('/')[-1] else '' -%}
+          {%-   set issues = [] -%}
+          {%-   if '@sha256:' not in e.image and tag in ['', 'latest'] -%}{%- set _ = issues.append('floating tag "' ~ (tag or 'none') ~ '"') -%}{%- endif -%}
+          {%-   if e.pull | default('') == '' -%}{%- set _ = issues.append('pull policy unset') -%}{%- endif -%}
+          {%-   if not users and not e.managed | default(false) -%}{%- set _ = issues.append('not used by any job template') -%}{%- endif -%}
+          {%-   if not e.credential | default(none) and not e.image.startswith('registry.redhat.io') -%}{%- set _ = issues.append('no registry credential') -%}{%- endif -%}
+          {%-   set _ = out.append({'host': e.name, 'status': 'warn' if issues else 'ok',
+                 'summary': e.image ~ ' (pull ' ~ (e.pull or 'default') ~ '), used by ' ~ users | length ~ ' template(s)' ~ ((' - ' ~ issues | join('; ')) if issues else ''),
+                 'details': {'id': e.id, 'image': e.image, 'managed': e.managed | default(false), 'organization': e.summary_fields.organization.name | default('global'),
+                             'templates': users[:25], 'issues': issues}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _rows | selectattr('status', 'equalto', 'warn') | list else 'ok' }}"
+          summary: >-
+            {{ _ees | length }} execution environment(s); {{ _rows | selectattr('status', 'equalto', 'warn') | list | length }} with findings;
+            {{ aap_api_results | rejectattr('execution_environment') | list | length }} job template(s) without an explicit EE
+          details: {templates_without_ee: "{{ aap_api_results | rejectattr('execution_environment') | map(attribute='name') | list }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: EE audit}

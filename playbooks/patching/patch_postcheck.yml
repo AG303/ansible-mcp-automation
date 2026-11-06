@@ -1,0 +1,32 @@
+---
+# PATCH - Post-patch validation
+# Domain: Patch Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Uptime, kernel/build, remaining updates, failed services and optional TCP checks after patching.
+# Returns aap_ops_result.
+# Survey variables: critical_services
+
+- name: PATCH - Post-patch validation
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: PATCH - Post-patch validation
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run patch_manage/postcheck
+      ansible.builtin.include_role:
+        name: devops.aap_ops.patch_manage
+        tasks_from: postcheck
+
+- name: Report - PATCH - Post-patch validation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PATCH - Post-patch validation
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

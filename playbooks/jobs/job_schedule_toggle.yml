@@ -1,0 +1,25 @@
+---
+# JOB - Enable or disable schedules
+# Domain: Job Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES PLATFORM. Enables or disables schedules whose name or template matches a filter, e.g. to pause
+# automation during a change freeze. Use the WF workflow (approval required).
+# Survey variables: name_filter, desired_state
+
+- name: JOB - Enable or disable schedules
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: JOB - Enable or disable schedules
+  tasks:
+    - name: AAP API connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+    - name: Run aap_jobs/schedule_toggle
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_jobs
+        tasks_from: schedule_toggle
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

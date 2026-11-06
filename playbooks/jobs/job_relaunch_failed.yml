@@ -1,0 +1,25 @@
+---
+# JOB - Relaunch failed job
+# Domain: Job Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES SYSTEMS. Relaunches a failed job by ID, optionally only on the hosts that failed, and waits for the
+# result. Use the WF workflow (approval required).
+# Survey variables: job_id, failed_hosts_only
+
+- name: JOB - Relaunch failed job
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: JOB - Relaunch failed job
+  tasks:
+    - name: AAP API connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+    - name: Run aap_jobs/relaunch_failed
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_jobs
+        tasks_from: relaunch_failed
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

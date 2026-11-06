@@ -1,0 +1,55 @@
+---
+- name: Cancel stuck jobs
+  block:
+    - name: Get running (and optionally pending/waiting) jobs
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/unified_jobs/"
+        aap_api_query: >-
+          {{ {'status__in': 'running,pending,waiting' if include_pending | default(false) | bool else 'running',
+              'order_by': 'created', 'not__type': 'system_job'}
+             | combine({'name__icontains': template_filter} if template_filter | default('') | length > 0 else {}) }}
+
+    - name: Select jobs older than threshold
+      ansible.builtin.set_fact:
+        _stuck: >-
+          {%- set out = [] -%}
+          {%- for j in aap_api_results -%}
+          {%-   set ts = j.started or j.created -%}
+          {%-   set mins = ((now().timestamp() - ((ts[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 60) | int -%}
+          {%-   if mins > (max_minutes | default(240) | int) and j.name is not search(aap_jobs_protected_name_regex)
+                   and j.id | string != tower_job_id | default('') | string and j.id | string != tower_workflow_job_id | default('') | string -%}
+          {%-     set _ = out.append({'id': j.id, 'name': j.name, 'url': j.url, 'status': j.status, 'minutes': mins}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Refuse to cancel more than the safety cap
+      ansible.builtin.assert:
+        that: _stuck | length <= aap_jobs_max_cancel | int
+        fail_msg: "{{ _stuck | length }} jobs matched; cap is {{ aap_jobs_max_cancel }}. Narrow template_filter or raise aap_jobs_max_cancel."
+        quiet: true
+
+    - name: Cancel jobs
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ item.url }}cancel/"
+        aap_api_method: POST
+        aap_api_status: [202, 405]
+      loop: "{{ _stuck }}"
+      loop_control: {label: "{{ item.name }} #{{ item.id }}"}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: >-
+          {%- set out = [{'host': 'summary', 'status': 'changed' if _stuck | length > 0 else 'ok',
+                          'summary': (_stuck | length) ~ ' job(s) older than ' ~ (max_minutes | default(240)) ~ ' min cancelled', 'details': {}}] -%}
+          {%- for j in _stuck -%}
+          {%-   set _ = out.append({'host': j.name ~ ' #' ~ j.id, 'status': 'changed',
+                                   'summary': 'cancelled (' ~ j.status ~ ' for ' ~ j.minutes ~ ' min)', 'details': j}) -%}
+          {%- endfor -%}
+          {{ out }}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Cancel stuck jobs}

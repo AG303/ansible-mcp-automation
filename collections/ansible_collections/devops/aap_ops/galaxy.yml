@@ -1,0 +1,26 @@
+---
+namespace: devops
+name: aap_ops
+version: 1.0.0
+readme: README.md
+authors:
+  - DevOps Automation
+description: >-
+  Operational roles for Ansible Automation Platform 2.6 job templates designed to be
+  discovered and launched by AI agents through the AAP MCP server - server monitoring,
+  job management, security compliance (CIS/STIG), platform configuration (OpenShift
+  operator) and patch management and ServiceNow incident, change and problem integration for RHEL, Ubuntu and Windows.
+license:
+  - GPL-3.0-or-later
+tags: [aap, mcp, monitoring, compliance, patching, linux, windows, openshift]
+dependencies:
+  ansible.posix: ">=1.5.0"
+  ansible.windows: ">=2.0.0"
+  community.general: ">=8.0.0,<12.0.0"
+  community.windows: ">=2.0.0"
+  kubernetes.core: ">=3.0.0"
+  ansible.utils: ">=3.0.0"
+  servicenow.itsm: ">=2.6.0"
+repository: https://example.com/devops/aap26-mcp-automation
+build_ignore:
+  - "*.tar.gz"

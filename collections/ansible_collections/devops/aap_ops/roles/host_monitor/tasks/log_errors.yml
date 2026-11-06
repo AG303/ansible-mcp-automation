@@ -1,0 +1,51 @@
+---
+- name: Recent log errors
+  block:
+    - name: Linux - journald errors
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        if command -v journalctl >/dev/null; then
+          journalctl -p err --since "{{ hours | default(24) | int }} hours ago" --no-pager -o short-iso -q \
+            {% if match_pattern | default('') %}--grep {{ match_pattern | quote }}{% endif %} | tail -n {{ max_entries | default(50) | int }}
+        else
+          grep -Eih "{{ match_pattern | default('') or 'error|crit|fail' }}" /var/log/syslog /var/log/messages 2>/dev/null | tail -n {{ max_entries | default(50) | int }}
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: _le_linux
+
+    - name: Windows - event log errors
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $start = (Get-Date).AddHours(-{{ hours | default(24) | int }})
+        $pattern = '{{ match_pattern | default('') }}'
+        $ev = Get-WinEvent -FilterHashtable @{ LogName = @('{{ host_monitor_win_log_names | join("','") }}'); Level = 1,2; StartTime = $start } -ErrorAction SilentlyContinue |
+          Where-Object { -not $pattern -or $_.Message -match $pattern } | Select-Object -First {{ max_entries | default(50) | int }}
+        @($ev | ForEach-Object { '{0:s} {1} {2} id={3}: {4}' -f $_.TimeCreated, $_.LogName, $_.ProviderName, $_.Id, (($_.Message -split "`n")[0]) }) | ConvertTo-Json -Compress
+      changed_when: false
+      check_mode: false
+      register: _le_win
+
+    - name: Normalise entries
+      ansible.builtin.set_fact:
+        _le: >-
+          {{ ((_le_win.stdout | trim or '[]') | from_json) if aap_ops_is_windows else (_le_linux.stdout_lines | default([])) }}
+
+    - name: Ensure entries is a list
+      ansible.builtin.set_fact:
+        _le: "{{ [_le] if _le is string else _le }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'warn' if _le | length > 0 else 'ok' }}"
+          summary: "{{ _le | length }} error/critical entries in the last {{ hours | default(24) }}h"
+          details: {entries: "{{ _le | map('truncate', 300) | list }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Log errors}

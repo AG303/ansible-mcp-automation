@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: DevOps Automation
+  description: Collects aap_ops_host_result from every host, publishes aap_ops_result with set_stats and writes JSON/HTML reports.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms:
+    - name: EL
+      versions: ["8", "9", "10"]
+dependencies: []

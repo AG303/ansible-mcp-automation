@@ -1,0 +1,49 @@
+---
+# CHANGING. Linux only. dnf versionlock (RHEL) or apt-mark hold (Ubuntu).
+- name: Hold or release package versions
+  block:
+    - name: Require package names
+      ansible.builtin.assert:
+        that: _pkgs | length > 0
+        fail_msg: package_names is required.
+        quiet: true
+
+    - name: RHEL - ensure versionlock plugin
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.dnf:
+        name: python3-dnf-plugin-versionlock
+        state: present
+
+    - name: RHEL - versionlock
+      when: aap_ops_os == 'rhel'
+      community.general.dnf_versionlock:
+        name: "{{ _pkgs }}"
+        state: "{{ 'present' if hold_action | default('hold') == 'hold' else 'absent' }}"
+      register: _ph
+
+    - name: Ubuntu - dpkg selections
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: "{{ 'hold' if hold_action | default('hold') == 'hold' else 'install' }}"
+      loop: "{{ _pkgs }}"
+      register: _ph_apt
+
+    - name: Current holds
+      ansible.builtin.command: "{{ 'dnf -q versionlock list' if aap_ops_os == 'rhel' else 'apt-mark showhold' }}"
+      register: _ph_list
+      changed_when: false
+      check_mode: false
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if (_ph.changed | default(false) or _ph_apt.changed | default(false)) else 'ok' }}"
+          summary: "{{ hold_action | default('hold') }}: {{ _pkgs | join(', ') }}; {{ _ph_list.stdout_lines | length }} hold(s) now active"
+          details: {packages: "{{ _pkgs }}", action: "{{ hold_action | default('hold') }}", active_holds: "{{ _ph_list.stdout_lines }}"}
+  vars:
+    _pkgs: "{{ (package_names | default('')).split(',') | map('trim') | select | list }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Package hold}

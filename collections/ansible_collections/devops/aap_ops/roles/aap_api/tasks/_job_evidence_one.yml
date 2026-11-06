@@ -1,0 +1,46 @@
+---
+- name: "Job {{ _ev_job_id }} - details"
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    aap_api_path: "{{ aap_api_c }}/jobs/{{ _ev_job_id }}/"
+
+- name: "Job {{ _ev_job_id }} - keep details"
+  ansible.builtin.set_fact:
+    _ev_job: "{{ aap_api_response.json }}"
+
+- name: "Job {{ _ev_job_id }} - failed hosts"
+  ansible.builtin.include_tasks: get.yml
+  vars:
+    aap_api_path: "{{ aap_api_c }}/jobs/{{ _ev_job_id }}/job_host_summaries/"
+    aap_api_query: {or__failed: "true", or__dark__gt: 0}
+
+- name: "Job {{ _ev_job_id }} - keep failed hosts"
+  ansible.builtin.set_fact:
+    _ev_hosts: "{{ aap_api_results | map(attribute='host_name') | unique | list }}"
+
+- name: "Job {{ _ev_job_id }} - failing events"
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    aap_api_path: "{{ aap_api_c }}/jobs/{{ _ev_job_id }}/job_events/?event__in=runner_on_failed,runner_on_unreachable&page_size=20&order_by=-counter"
+
+- name: "Job {{ _ev_job_id }} - record"
+  ansible.builtin.set_fact:
+    _ev_collected: "{{ _ev_collected | default([]) + [_ev_item] }}"
+  vars:
+    _ev_tasks: >-
+      {%- set out = [] -%}
+      {%- for e in aap_api_response.json.results | default([]) -%}
+      {%-   set res = e.event_data.res | default({}) -%}
+      {%-   set _ = out.append({'host': e.host_name | default(''), 'task': e.task | default(''), 'event': e.event,
+                               'msg': (res.msg | default('') or res.stderr | default('') or res.reason | default('')) | string | truncate(400)}) -%}
+      {%- endfor -%}
+      {{ out }}
+    _ev_item:
+      id: "{{ _ev_job.id }}"
+      name: "{{ _ev_job.name }}"
+      status: "{{ _ev_job.status }}"
+      limit: "{{ _ev_job.limit | default('') }}"
+      failed_hosts: "{{ _ev_hosts }}"
+      failed_tasks: "{{ _ev_tasks }}"
+      result: "{{ _ev_job.artifacts.aap_ops_result | default({}) }}"
+      explanation: "{{ _ev_job.job_explanation | default('') }}"

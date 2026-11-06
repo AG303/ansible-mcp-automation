@@ -1,0 +1,12 @@
+---
+argument_specs:
+  scan:
+    short_description: Scan the selected baseline
+    options:
+      compliance_profile: {type: str, default: cis, choices: [cis, stig], description: "Baseline"}
+      min_score_pct: {type: int, default: 80, description: "Score below which the host fails"}
+  remediate:
+    short_description: Remediate failing automatable controls
+    options:
+      compliance_profile: {type: str, default: cis, choices: [cis, stig], description: "Baseline"}
+      control_ids: {type: str, default: "", description: "Comma separated control IDs to limit remediation (blank = all failing)"}

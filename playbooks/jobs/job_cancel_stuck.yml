@@ -1,0 +1,25 @@
+---
+# JOB - Cancel stuck jobs
+# Domain: Job Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES PLATFORM. Cancels running/pending jobs older than N minutes, optionally limited to a template name.
+# Dry-run list first with JOB - Long-running jobs. Use the WF workflow (approval required).
+# Survey variables: max_minutes, template_filter, include_pending
+
+- name: JOB - Cancel stuck jobs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: JOB - Cancel stuck jobs
+  tasks:
+    - name: AAP API connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+    - name: Run aap_jobs/cancel_stuck
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_jobs
+        tasks_from: cancel_stuck
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

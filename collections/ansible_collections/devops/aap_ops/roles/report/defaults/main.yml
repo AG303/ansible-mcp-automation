@@ -1,0 +1,11 @@
+---
+# Title shown in reports; playbooks set this to the job template name.
+aap_ops_report_title: "{{ tower_job_template_name | default(ansible_play_name | default('aap_ops')) }}"
+# Where JSON/HTML reports are written on the controller side (localhost of the job).
+aap_ops_report_dir: /tmp/aap_ops_reports
+aap_ops_report_formats: [json, html]
+# Host statuses that make the job fail (so the agent sees a failed job).
+aap_ops_fail_on_status: [fail]
+# Limit how much per-host detail goes into set_stats (artifacts are size-limited).
+aap_ops_stats_max_hosts: 200
+aap_ops_stats_detail_chars: 2000

@@ -1,0 +1,31 @@
+---
+# MON - System inventory report
+# Domain: Server Monitoring. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. OS, kernel/build, CPU, memory, disks, IPs, virtualization and last boot for each host. Returns
+# aap_ops_result.
+
+- name: MON - System inventory report
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: MON - System inventory report
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_monitor/system_inventory
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_monitor
+        tasks_from: system_inventory
+
+- name: Report - MON - System inventory report
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: MON - System inventory report
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

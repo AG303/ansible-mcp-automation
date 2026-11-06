@@ -1,0 +1,838 @@
+---
+# Single source of truth for every job template in this project.
+# tools/gen_config.py turns this file into AAP config-as-code (aap_config/vars/*.yml)
+# and docs/CATALOG.md. Edit here, then regenerate.
+#
+# Fields
+#   id          playbook file stem; playbook lives at playbooks/<domain>/<id>.yml
+#   name        job template name (what an AI agent sees through the MCP server)
+#   description agent-facing: what it does, what it returns, safe or changing
+#   changes     true  -> modifies systems; the agent-facing entry point is the
+#                        "WF - <name>" workflow with an approval node
+#               false -> read-only; the agent launches the job template directly
+#   target      hosts | aap_api | openshift | servicenow   (selects inventory + credentials)
+#   writes      optional; "servicenow" = creates/updates ServiceNow records only (no
+#               system change, so no approval node; the agent launches it directly)
+#   os          platforms supported when target=hosts
+#   survey      list of {var, q, type, default, choices, required, min, max}
+#               types: text | integer | multiplechoice | multiselect | float
+#
+# Common variables every playbook honours (never put in a survey):
+#   aap_ops_target           host pattern; default "all" (use the AAP launch "limit" instead when possible)
+#   aap_ops_report_dir       default /tmp/aap_ops_reports
+#   aap_ops_fail_on_status   default [fail]  - statuses that mark the job failed
+#
+# ServiceNow change gate: every "WF - <name>" workflow for a changing template adds a
+# required survey question sn_change_number and runs
+#   SN - Change gate -> approval -> SN - Change start -> <template>
+#     success -> SN - Change close (successful)
+#     failure -> SN - Change close (unsuccessful) + SN - Incident from failed job
+
+domains:
+  monitoring: {code: MON, title: Server Monitoring}
+  jobs: {code: JOB, title: Job Management}
+  security: {code: SEC, title: Security Compliance}
+  platform: {code: PLAT, title: Platform Configuration}
+  patching: {code: PATCH, title: Patch Management}
+  itsm: {code: SN, title: ServiceNow Incident, Change and Problem}
+
+templates:
+  # ---------------------------------------------------------------- monitoring
+  - id: mon_health_check
+    domain: monitoring
+    name: MON - Host health check
+    description: Read-only. CPU, memory, swap, load, disk and uptime per host with ok/warn/fail against thresholds. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: cpu_warn_pct, q: "CPU warn threshold (%)", type: integer, default: 85, min: 1, max: 100}
+      - {var: mem_warn_pct, q: "Memory warn threshold (%)", type: integer, default: 90, min: 1, max: 100}
+      - {var: disk_warn_pct, q: "Disk warn threshold (%)", type: integer, default: 85, min: 1, max: 100}
+  - id: mon_disk_usage
+    domain: monitoring
+    name: MON - Disk usage and largest directories
+    description: Read-only. Filesystem usage per mount/drive with thresholds and the largest directories under a path. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: disk_warn_pct, q: "Warn threshold (%)", type: integer, default: 80, min: 1, max: 100}
+      - {var: disk_fail_pct, q: "Fail threshold (%)", type: integer, default: 92, min: 1, max: 100}
+      - {var: scan_path, q: "Path to list largest directories (blank skips)", type: text, default: "", required: false}
+  - id: mon_service_status
+    domain: monitoring
+    name: MON - Service status check
+    description: Read-only. Reports whether named services/units are installed, running and enabled. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: service_names, q: "Comma-separated service names", type: text, default: "sshd,chronyd", required: true}
+  - id: mon_port_check
+    domain: monitoring
+    name: MON - Port and endpoint reachability
+    description: Read-only. Tests TCP connectivity from each host to host:port targets and lists local listening ports. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: endpoints, q: "Comma-separated host:port targets", type: text, default: "", required: false}
+      - {var: timeout_sec, q: "Connect timeout (seconds)", type: integer, default: 5, min: 1, max: 60}
+  - id: mon_log_errors
+    domain: monitoring
+    name: MON - Recent log errors
+    description: Read-only. Collects error/critical entries from journald/syslog or the Windows System/Application event logs for the last N hours. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: hours, q: "Look-back window (hours)", type: integer, default: 24, min: 1, max: 720}
+      - {var: max_entries, q: "Max entries per host", type: integer, default: 50, min: 1, max: 500}
+      - {var: match_pattern, q: "Optional regex filter", type: text, default: "", required: false}
+  - id: mon_top_processes
+    domain: monitoring
+    name: MON - Top processes
+    description: Read-only. Top N processes by CPU and by memory on each host. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: top_n, q: "Number of processes", type: integer, default: 10, min: 1, max: 50}
+  - id: mon_cert_expiry
+    domain: monitoring
+    name: MON - TLS certificate expiry
+    description: Read-only. Checks certificate files on hosts and remote TLS endpoints for days to expiry. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: cert_paths, q: "Comma-separated certificate file paths (Linux)", type: text, default: "", required: false}
+      - {var: tls_endpoints, q: "Comma-separated host:port TLS endpoints", type: text, default: "", required: false}
+      - {var: warn_days, q: "Warn when expiring within (days)", type: integer, default: 30, min: 1, max: 365}
+  - id: mon_time_sync
+    domain: monitoring
+    name: MON - Time synchronization status
+    description: Read-only. chrony/systemd-timesyncd/w32time sync state and offset. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: max_offset_ms, q: "Max acceptable offset (ms)", type: integer, default: 500, min: 1, max: 600000}
+  - id: mon_network_diag
+    domain: monitoring
+    name: MON - Network diagnostics
+    description: Read-only. Interfaces, default gateway reachability, DNS resolution of given names and interface error counters. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: dns_names, q: "Comma-separated names to resolve", type: text, default: "redhat.com", required: false}
+  - id: mon_system_inventory
+    domain: monitoring
+    name: MON - System inventory report
+    description: Read-only. OS, kernel/build, CPU, memory, disks, IPs, virtualization and last boot for each host. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey: []
+  - id: mon_fleet_report
+    domain: monitoring
+    name: MON - Fleet health summary
+    description: Read-only. One-pass fleet summary combining health, disk, time sync and pending reboot into a single ranked report. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: disk_warn_pct, q: "Disk warn threshold (%)", type: integer, default: 85, min: 1, max: 100}
+  - id: mon_service_restart
+    domain: monitoring
+    name: MON - Restart service with validation
+    description: CHANGES SYSTEMS. Restarts one service, waits for it to report running and optionally checks a TCP port. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: service_name, q: "Service name", type: text, default: "", required: true}
+      - {var: verify_port, q: "TCP port to verify after restart (0 skips)", type: integer, default: 0, min: 0, max: 65535}
+  - id: mon_disk_cleanup
+    domain: monitoring
+    name: MON - Disk cleanup
+    description: CHANGES SYSTEMS. Cleans package caches, rotated/compressed logs, old journal entries and temp files older than N days. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: older_than_days, q: "Remove temp/log files older than (days)", type: integer, default: 14, min: 1, max: 365}
+      - {var: journal_max_size, q: "journald vacuum size (Linux)", type: text, default: 500M}
+
+  # ---------------------------------------------------------------- jobs (AAP API)
+  - id: job_failed_summary
+    domain: jobs
+    name: JOB - Failed jobs summary
+    description: Read-only. Failed/error jobs in the last N hours with template, launcher, failed hosts and the failing task output excerpt. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: hours, q: "Look-back window (hours)", type: integer, default: 24, min: 1, max: 720}
+      - {var: template_filter, q: "Optional template name contains", type: text, default: "", required: false}
+  - id: job_long_running
+    domain: jobs
+    name: JOB - Long-running jobs
+    description: Read-only. Running jobs exceeding N minutes or the template's typical duration multiplied by a factor. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: max_minutes, q: "Flag jobs running longer than (minutes)", type: integer, default: 60, min: 1, max: 10080}
+  - id: job_cancel_stuck
+    domain: jobs
+    name: JOB - Cancel stuck jobs
+    description: CHANGES PLATFORM. Cancels running/pending jobs older than N minutes, optionally limited to a template name. Dry-run list first with JOB - Long-running jobs. Use the WF workflow (approval required).
+    changes: true
+    target: aap_api
+    survey:
+      - {var: max_minutes, q: "Cancel jobs running/pending longer than (minutes)", type: integer, default: 240, min: 5, max: 10080}
+      - {var: template_filter, q: "Only templates whose name contains", type: text, default: "", required: false}
+      - {var: include_pending, q: "Also cancel pending jobs", type: multiplechoice, default: "no", choices: ["yes", "no"]}
+  - id: job_relaunch_failed
+    domain: jobs
+    name: JOB - Relaunch failed job
+    description: CHANGES SYSTEMS. Relaunches a failed job by ID, optionally only on the hosts that failed, and waits for the result. Use the WF workflow (approval required).
+    changes: true
+    target: aap_api
+    survey:
+      - {var: job_id, q: "Failed job ID", type: integer, default: 0, min: 1, max: 999999999, required: true}
+      - {var: failed_hosts_only, q: "Relaunch only on failed hosts", type: multiplechoice, default: "yes", choices: ["yes", "no"]}
+  - id: job_schedule_audit
+    domain: jobs
+    name: JOB - Schedule audit
+    description: Read-only. All schedules with enabled state, next run, RRULE and target; flags disabled, expired and never-run schedules. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: name_filter, q: "Optional schedule/template name contains", type: text, default: "", required: false}
+  - id: job_schedule_toggle
+    domain: jobs
+    name: JOB - Enable or disable schedules
+    description: CHANGES PLATFORM. Enables or disables schedules whose name or template matches a filter, e.g. to pause automation during a change freeze. Use the WF workflow (approval required).
+    changes: true
+    target: aap_api
+    survey:
+      - {var: name_filter, q: "Schedule or template name contains", type: text, default: "", required: true}
+      - {var: desired_state, q: "Desired state", type: multiplechoice, default: disabled, choices: [enabled, disabled]}
+  - id: job_template_audit
+    domain: jobs
+    name: JOB - Job template hygiene audit
+    description: Read-only. Templates with no runs in N days, high failure rate, missing execution environment, or prompt-on-launch everything. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: stale_days, q: "Flag templates not run in (days)", type: integer, default: 90, min: 1, max: 3650}
+      - {var: failure_rate_pct, q: "Flag failure rate above (%)", type: integer, default: 30, min: 1, max: 100}
+  - id: job_capacity_queue
+    domain: jobs
+    name: JOB - Queue and capacity status
+    description: Read-only. Pending/waiting/running job counts, instance group capacity and consumed capacity, and jobs waiting longest. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey: []
+  - id: job_host_failure_trend
+    domain: jobs
+    name: JOB - Host failure trend
+    description: Read-only. Hosts with the most failed or unreachable job events over N days, with the templates involved. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: days, q: "Look-back window (days)", type: integer, default: 7, min: 1, max: 90}
+      - {var: top_n, q: "Number of hosts", type: integer, default: 20, min: 1, max: 200}
+  - id: job_launch_template
+    domain: jobs
+    name: JOB - Launch template in batches
+    description: CHANGES SYSTEMS. Launches another job template against a limit in sequential batches and stops on the first failed batch. Use the WF workflow (approval required).
+    changes: true
+    target: aap_api
+    survey:
+      - {var: launch_template_name, q: "Job template name to launch", type: text, default: "", required: true}
+      - {var: launch_limit, q: "Host limit pattern", type: text, default: "", required: true}
+      - {var: batch_size, q: "Hosts per batch", type: integer, default: 10, min: 1, max: 1000}
+  - id: job_cleanup_history
+    domain: jobs
+    name: JOB - Run job history cleanup
+    description: CHANGES PLATFORM. Launches the built-in Cleanup Job Details system job keeping N days. Use the WF workflow (approval required).
+    changes: true
+    target: aap_api
+    survey:
+      - {var: keep_days, q: "Days of job history to keep", type: integer, default: 90, min: 1, max: 3650}
+  - id: job_workflow_approvals
+    domain: jobs
+    name: JOB - Pending workflow approvals
+    description: Read-only. Lists pending workflow approvals with workflow name, requester and age so an agent can tell a human what is waiting. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey: []
+
+  # ---------------------------------------------------------------- security
+  - id: sec_compliance_scan
+    domain: security
+    name: SEC - Compliance scan (CIS or STIG)
+    description: Read-only. Evaluates hosts against the selected CIS Level 1 or DISA STIG baseline subset and reports pass/fail per control with an overall score. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: compliance_profile, q: "Baseline", type: multiplechoice, default: cis, choices: [cis, stig]}
+      - {var: min_score_pct, q: "Mark host failed below score (%)", type: integer, default: 80, min: 0, max: 100}
+  - id: sec_compliance_remediate
+    domain: security
+    name: SEC - Compliance remediation (CIS or STIG)
+    description: CHANGES SYSTEMS. Applies remediation for the selected baseline's automatable controls, optionally restricted to listed control IDs. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: compliance_profile, q: "Baseline", type: multiplechoice, default: cis, choices: [cis, stig]}
+      - {var: control_ids, q: "Comma-separated control IDs (blank = all automatable)", type: text, default: "", required: false}
+  - id: sec_ssh_hardening
+    domain: security
+    name: SEC - SSH hardening
+    description: CHANGES SYSTEMS. Applies a hardened sshd configuration (root login, ciphers, MACs, timeouts, banner) with config validation before reload. Linux only. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu]
+    survey:
+      - {var: permit_root_login, q: "PermitRootLogin", type: multiplechoice, default: "no", choices: ["no", prohibit-password]}
+      - {var: allow_groups, q: "AllowGroups (space separated, blank = unchanged)", type: text, default: "", required: false}
+  - id: sec_password_policy
+    domain: security
+    name: SEC - Password and lockout policy
+    description: CHANGES SYSTEMS. Enforces password length/complexity, aging and account lockout using pwquality/faillock or Windows account policy. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: min_length, q: "Minimum password length", type: integer, default: 14, min: 8, max: 64}
+      - {var: max_age_days, q: "Maximum password age (days)", type: integer, default: 365, min: 1, max: 9999}
+      - {var: lockout_attempts, q: "Lockout after failed attempts", type: integer, default: 5, min: 1, max: 20}
+  - id: sec_user_audit
+    domain: security
+    name: SEC - Local account audit
+    description: Read-only. Local users, UID 0 and administrator members, empty-password and never-expiring accounts, sudoers entries and stale accounts. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: stale_days, q: "Flag accounts unused for (days)", type: integer, default: 90, min: 1, max: 3650}
+  - id: sec_firewall_baseline
+    domain: security
+    name: SEC - Host firewall baseline
+    description: CHANGES SYSTEMS. Ensures the host firewall (firewalld, ufw or Windows Firewall) is enabled with an allow-list of TCP ports. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: allowed_tcp_ports, q: "Comma-separated allowed inbound TCP ports", type: text, default: "22", required: true}
+  - id: sec_mac_status
+    domain: security
+    name: SEC - SELinux, AppArmor and Defender status
+    description: Read-only. SELinux mode, AppArmor profile status or Microsoft Defender real-time protection and signature age. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey: []
+  - id: sec_file_permissions_audit
+    domain: security
+    name: SEC - File permission audit
+    description: Read-only. World-writable files, unowned files and SUID/SGID binaries not on an allow-list (Linux); permissive ACLs on key Windows paths. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: scan_paths, q: "Comma-separated paths to scan", type: text, default: "/etc,/usr/bin,/usr/sbin,/var", required: false}
+  - id: sec_audit_logging
+    domain: security
+    name: SEC - Audit logging configuration
+    description: CHANGES SYSTEMS. Configures auditd with baseline rules (Linux) or Advanced Audit Policy categories (Windows) and verifies the service. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: compliance_profile, q: "Baseline", type: multiplechoice, default: cis, choices: [cis, stig]}
+  - id: sec_open_ports_audit
+    domain: security
+    name: SEC - Listening ports audit
+    description: Read-only. Listening TCP/UDP ports with owning process compared to an allow-list; flags anything unexpected. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: allowed_ports, q: "Comma-separated allowed listening ports", type: text, default: "22,123", required: false}
+  - id: sec_aap_credential_audit
+    domain: security
+    name: SEC - AAP credential audit
+    description: Read-only. AAP credentials with type, organization, owner, last modified and whether any template uses them; flags unused and old credentials. Never returns secret values. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: stale_days, q: "Flag credentials unmodified for (days)", type: integer, default: 365, min: 1, max: 3650}
+  - id: sec_aap_rbac_audit
+    domain: security
+    name: SEC - AAP users and RBAC audit
+    description: Read-only. Superusers, system auditors, users without recent login, team membership and organization admins from the platform gateway. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: stale_days, q: "Flag users without login in (days)", type: integer, default: 90, min: 1, max: 3650}
+  - id: sec_aap_activity_audit
+    domain: security
+    name: SEC - AAP activity stream audit
+    description: Read-only. Create/update/delete events in the controller activity stream over the last N hours grouped by actor and object type, including credential and RBAC changes. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: hours, q: "Look-back window (hours)", type: integer, default: 24, min: 1, max: 720}
+  - id: sec_aap_token_audit
+    domain: security
+    name: SEC - AAP token audit
+    description: Read-only. Personal access tokens and OAuth applications with owner, scope, created and expiry; flags write-scoped and long-lived tokens (including MCP agent tokens). Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey:
+      - {var: max_age_days, q: "Flag tokens older than (days)", type: integer, default: 90, min: 1, max: 3650}
+
+  # ---------------------------------------------------------------- platform (OpenShift operator + API)
+  - id: plat_health_status
+    domain: platform
+    name: PLAT - AAP platform health
+    description: Read-only. AnsibleAutomationPlatform custom resource conditions, component pods and restarts, routes, and the gateway/controller ping endpoints. Returns aap_ops_result.
+    changes: false
+    target: openshift
+    survey:
+      - {var: aap_namespace, q: "AAP namespace", type: text, default: aap, required: true}
+      - {var: aap_cr_name, q: "AnsibleAutomationPlatform name", type: text, default: aap, required: true}
+  - id: plat_mcp_status
+    domain: platform
+    name: PLAT - MCP server status
+    description: Read-only. MCP server pod, route and readiness on OpenShift plus an HTTP check of the MCP endpoint. Returns aap_ops_result.
+    changes: false
+    target: openshift
+    survey:
+      - {var: aap_namespace, q: "AAP namespace", type: text, default: aap, required: true}
+      - {var: aap_cr_name, q: "AnsibleAutomationPlatform name", type: text, default: aap, required: true}
+  - id: plat_mcp_configure
+    domain: platform
+    name: PLAT - Enable or disable MCP server
+    description: CHANGES PLATFORM. Sets spec.mcp on the AnsibleAutomationPlatform custom resource and waits for the operator to reconcile. Use the WF workflow (approval required).
+    changes: true
+    target: openshift
+    survey:
+      - {var: aap_namespace, q: "AAP namespace", type: text, default: aap, required: true}
+      - {var: aap_cr_name, q: "AnsibleAutomationPlatform name", type: text, default: aap, required: true}
+      - {var: mcp_enabled, q: "MCP server enabled", type: multiplechoice, default: "yes", choices: ["yes", "no"]}
+  - id: plat_operator_status
+    domain: platform
+    name: PLAT - Operator version and upgrade status
+    description: Read-only. AAP operator ClusterServiceVersion, subscription channel, install plan approval mode and pending install plans. Returns aap_ops_result.
+    changes: false
+    target: openshift
+    survey:
+      - {var: aap_namespace, q: "AAP namespace", type: text, default: aap, required: true}
+  - id: plat_backup
+    domain: platform
+    name: PLAT - Platform backup
+    description: CHANGES PLATFORM. Creates an AnsibleAutomationPlatformBackup custom resource and waits for it to complete. Use the WF workflow (approval required).
+    changes: true
+    target: openshift
+    survey:
+      - {var: aap_namespace, q: "AAP namespace", type: text, default: aap, required: true}
+      - {var: aap_cr_name, q: "AnsibleAutomationPlatform name", type: text, default: aap, required: true}
+      - {var: backup_pvc_size, q: "Backup PVC size", type: text, default: 20Gi}
+  - id: plat_backup_audit
+    domain: platform
+    name: PLAT - Backup audit
+    description: Read-only. Existing platform backup custom resources, their status and age; flags when the newest successful backup is older than N days. Returns aap_ops_result.
+    changes: false
+    target: openshift
+    survey:
+      - {var: aap_namespace, q: "AAP namespace", type: text, default: aap, required: true}
+      - {var: max_age_days, q: "Flag if newest backup older than (days)", type: integer, default: 7, min: 1, max: 365}
+  - id: plat_instance_groups
+    domain: platform
+    name: PLAT - Instance and container group audit
+    description: Read-only. Instance groups and container groups with capacity, policy, pod spec override presence and attached templates. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey: []
+  - id: plat_ee_audit
+    domain: platform
+    name: PLAT - Execution environment audit
+    description: Read-only. Execution environments with image, tag, pull policy, credential and usage; flags latest tags and unused EEs. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey: []
+  - id: plat_ee_register
+    domain: platform
+    name: PLAT - Register execution environment
+    description: CHANGES PLATFORM. Creates or updates an execution environment definition (name, image, pull policy, organization). Use the WF workflow (approval required).
+    changes: true
+    target: aap_api
+    survey:
+      - {var: ee_name, q: "Execution environment name", type: text, default: "", required: true}
+      - {var: ee_image, q: "Image reference", type: text, default: "", required: true}
+      - {var: ee_pull, q: "Pull policy", type: multiplechoice, default: missing, choices: [always, missing, never]}
+      - {var: ee_organization, q: "Organization (blank = global)", type: text, default: "", required: false}
+  - id: plat_settings_export
+    domain: platform
+    name: PLAT - Export configuration snapshot
+    description: Read-only. Exports controller settings and organizations, projects, inventories, templates and credentials (no secrets) to a JSON snapshot for drift review. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey: []
+  - id: plat_config_drift
+    domain: platform
+    name: PLAT - Configuration drift check
+    description: Read-only. Compares this project's config-as-code (aap_config/vars) with what is live in AAP and lists missing or different objects. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey: []
+  - id: plat_config_apply
+    domain: platform
+    name: PLAT - Apply config-as-code
+    description: CHANGES PLATFORM. Applies aap_config/vars with infra.aap_configuration dispatch (projects, inventories, templates, workflows, schedules, RBAC). Use the WF workflow (approval required).
+    changes: true
+    target: aap_api
+    survey: []
+  - id: plat_subscription_usage
+    domain: platform
+    name: PLAT - Subscription and host usage
+    description: Read-only. Subscription status, licensed versus automated host counts and deleted-host counts from the controller config endpoint. Returns aap_ops_result.
+    changes: false
+    target: aap_api
+    survey: []
+
+  # ---------------------------------------------------------------- patching
+  - id: patch_available
+    domain: patching
+    name: PATCH - Available updates
+    description: Read-only. Lists available updates per host (security-only optional) with counts by severity where the OS reports it. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: security_only, q: "Security updates only", type: multiplechoice, default: "no", choices: ["yes", "no"]}
+  - id: patch_precheck
+    domain: patching
+    name: PATCH - Pre-patch readiness
+    description: Read-only. Free space, repository/update source reachability, pending reboot, package manager locks and running critical services before patching. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: min_free_mb, q: "Minimum free space on / or C: (MB)", type: integer, default: 2048, min: 100, max: 1000000}
+      - {var: critical_services, q: "Comma-separated services that must be running", type: text, default: "", required: false}
+  - id: patch_apply
+    domain: patching
+    name: PATCH - Apply updates
+    description: CHANGES SYSTEMS. Applies all or security updates in rolling batches with optional exclusions and a reboot policy. Use the WF workflow (approval required, runs pre-check and post-check).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: security_only, q: "Security updates only", type: multiplechoice, default: "yes", choices: ["yes", "no"]}
+      - {var: exclude_packages, q: "Comma-separated packages to exclude", type: text, default: "", required: false}
+      - {var: reboot_policy, q: "Reboot policy", type: multiplechoice, default: if_required, choices: [if_required, always, never]}
+      - {var: serial_pct, q: "Batch size (% of hosts per batch)", type: integer, default: 25, min: 1, max: 100}
+  - id: patch_postcheck
+    domain: patching
+    name: PATCH - Post-patch validation
+    description: Read-only. Uptime, kernel/build, remaining updates, failed services and optional TCP checks after patching. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: critical_services, q: "Comma-separated services that must be running", type: text, default: "", required: false}
+  - id: patch_reboot_required
+    domain: patching
+    name: PATCH - Reboot required check
+    description: Read-only. Whether each host needs a reboot (needs-restarting, reboot-required, Windows pending reboot keys) and why. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey: []
+  - id: patch_reboot
+    domain: patching
+    name: PATCH - Controlled reboot
+    description: CHANGES SYSTEMS. Reboots hosts in batches, waits for them to return and verifies critical services. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: only_if_required, q: "Only reboot hosts that need it", type: multiplechoice, default: "yes", choices: ["yes", "no"]}
+      - {var: serial_pct, q: "Batch size (% of hosts per batch)", type: integer, default: 25, min: 1, max: 100}
+      - {var: critical_services, q: "Comma-separated services to verify", type: text, default: "", required: false}
+  - id: patch_cve_check
+    domain: patching
+    name: PATCH - Package or CVE exposure check
+    description: Read-only. Checks installed versions of named packages (or Windows KBs) against a minimum fixed version and reports exposed hosts. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: package_name, q: "Package name (Linux) or KB number (Windows)", type: text, default: "", required: true}
+      - {var: fixed_version, q: "Minimum fixed version (blank = report version only)", type: text, default: "", required: false}
+  - id: patch_package
+    domain: patching
+    name: PATCH - Install, update or remove a package
+    description: CHANGES SYSTEMS. Installs, updates to latest or removes named packages (dnf, apt, or Chocolatey/winget on Windows). Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: package_names, q: "Comma-separated package names", type: text, default: "", required: true}
+      - {var: package_state, q: "Desired state", type: multiplechoice, default: present, choices: [present, latest, absent]}
+  - id: patch_source_configure
+    domain: patching
+    name: PATCH - Configure update source
+    description: CHANGES SYSTEMS. Points hosts at their update source - vendor repos, Red Hat Satellite, an apt mirror, or WSUS - using inventory variables. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: patch_source, q: "Update source", type: multiplechoice, default: vendor, choices: [vendor, satellite, mirror, wsus]}
+  - id: patch_compliance_report
+    domain: patching
+    name: PATCH - Patch compliance report
+    description: Read-only. Days since last patch, pending update counts and reboot state per host ranked by risk across the fleet. Returns aap_ops_result.
+    changes: false
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: max_days_since_patch, q: "Flag hosts not patched in (days)", type: integer, default: 35, min: 1, max: 3650}
+  - id: patch_kernel_cleanup
+    domain: patching
+    name: PATCH - Old kernel cleanup
+    description: CHANGES SYSTEMS. Removes old kernels keeping the running kernel plus N most recent (Linux only). Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu]
+    survey:
+      - {var: keep_kernels, q: "Kernels to keep", type: integer, default: 2, min: 2, max: 10}
+  - id: patch_package_hold
+    domain: patching
+    name: PATCH - Hold or release package versions
+    description: CHANGES SYSTEMS. Places or removes a version hold (dnf versionlock or apt-mark hold) on named packages. Linux only. Use the WF workflow (approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu]
+    survey:
+      - {var: package_names, q: "Comma-separated package names", type: text, default: "", required: true}
+      - {var: hold_action, q: "Action", type: multiplechoice, default: hold, choices: [hold, release]}
+
+  # ---------------------------------------------------------------- itsm (ServiceNow)
+  - id: sn_connection_test
+    domain: itsm
+    name: SN - ServiceNow connection test
+    description: Read-only. Verifies the ServiceNow credential, instance reachability, build version and read access to incident, change_request, problem and cmdb_ci tables. Returns aap_ops_result.
+    changes: false
+    target: servicenow
+    survey: []
+  - id: sn_incident_create
+    domain: itsm
+    name: SN - Create incident
+    description: Writes ServiceNow records only. Opens an incident (or adds a work note to the open duplicate with the same correlation ID) with impact, urgency, assignment group and configuration item. Returns the incident number in aap_ops_result.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_short_description, q: "Short description", type: text, default: "", required: true}
+      - {var: sn_description, q: "Description", type: textarea, default: "", required: false}
+      - {var: sn_impact, q: "Impact", type: multiplechoice, default: medium, choices: [high, medium, low]}
+      - {var: sn_urgency, q: "Urgency", type: multiplechoice, default: medium, choices: [high, medium, low]}
+      - {var: sn_assignment_group, q: "Assignment group (blank = default)", type: text, default: "", required: false}
+      - {var: sn_cmdb_ci, q: "Configuration item name (blank = none)", type: text, default: "", required: false}
+      - {var: sn_correlation_id, q: "Correlation ID for de-duplication (blank = derived)", type: text, default: "", required: false}
+  - id: sn_incident_from_job
+    domain: itsm
+    name: SN - Incident from failed job
+    description: Writes ServiceNow records only. Reads a failed AAP job or workflow (failed nodes, failed hosts, failing task) and opens or updates a de-duplicated incident with the evidence. Used automatically as the failure node of every WF workflow; can also be launched with a job ID. Returns the incident number.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_source_job_id, q: "AAP job or workflow job ID (0 = calling workflow)", type: integer, default: 0, min: 0, max: 999999999}
+      - {var: sn_impact, q: "Impact", type: multiplechoice, default: medium, choices: [high, medium, low]}
+      - {var: sn_urgency, q: "Urgency", type: multiplechoice, default: medium, choices: [high, medium, low]}
+  - id: sn_incident_update
+    domain: itsm
+    name: SN - Update or resolve incident
+    description: Writes ServiceNow records only. Adds a work note, changes state, or resolves an incident with a close code and notes. Returns the updated incident.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_incident_number, q: "Incident number (INC...)", type: text, default: "", required: true}
+      - {var: sn_incident_state, q: "New state", type: multiplechoice, default: unchanged, choices: [unchanged, in_progress, on_hold, resolved, closed, canceled]}
+      - {var: sn_work_note, q: "Work note", type: textarea, default: "", required: false}
+      - {var: sn_close_code, q: "Close code (when resolving)", type: text, default: "Solved (Permanently)", required: false}
+      - {var: sn_close_notes, q: "Close notes (when resolving)", type: textarea, default: "", required: false}
+  - id: sn_incident_list
+    domain: itsm
+    name: SN - Open incidents report
+    description: Read-only. Open incidents filtered by assignment group, priority or AAP-created only, with age, CI and state so an agent can pick what to work on. Returns aap_ops_result.
+    changes: false
+    target: servicenow
+    survey:
+      - {var: sn_assignment_group, q: "Assignment group (blank = any)", type: text, default: "", required: false}
+      - {var: sn_max_priority, q: "Include priorities up to (1-5)", type: integer, default: 3, min: 1, max: 5}
+      - {var: sn_aap_only, q: "Only incidents opened by AAP", type: multiplechoice, default: "no", choices: ["yes", "no"]}
+  - id: sn_incident_diagnostics
+    domain: itsm
+    name: SN - Incident diagnostics
+    description: Read-only on hosts, writes a ServiceNow work note. Runs health, disk, service and recent-error diagnostics on the incident's configuration item (or the launch limit) and posts the findings to the incident. Returns aap_ops_result.
+    changes: false
+    writes: servicenow
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: sn_incident_number, q: "Incident number (INC...)", type: text, default: "", required: true}
+      - {var: service_names, q: "Services to check (comma separated, blank = none)", type: text, default: "", required: false}
+      - {var: hours, q: "Look back for log errors (hours)", type: integer, default: 4, min: 1, max: 168}
+  - id: sn_incident_remediate
+    domain: itsm
+    name: SN - Incident remediation
+    description: CHANGES SYSTEMS. Runs a standard remediation (restart service, disk cleanup or clear temp) on the incident's hosts, re-checks health and resolves the incident when healthy. Use the WF workflow (approved change and AAP approval required).
+    changes: true
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: sn_incident_number, q: "Incident number (INC...)", type: text, default: "", required: true}
+      - {var: remediation_action, q: "Remediation", type: multiplechoice, default: restart_service, choices: [restart_service, disk_cleanup, clear_temp]}
+      - {var: service_name, q: "Service name (for restart_service)", type: text, default: "", required: false}
+      - {var: resolve_on_success, q: "Resolve the incident when healthy", type: multiplechoice, default: "yes", choices: ["yes", "no"]}
+  - id: sn_change_create
+    domain: itsm
+    name: SN - Create change request
+    description: Writes ServiceNow records only. Creates a normal, standard or emergency change request for an AAP template with planned start/end window, affected CIs and an implementation/backout plan. Returns the change number for use as sn_change_number.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_change_type, q: "Change type", type: multiplechoice, default: normal, choices: [normal, standard, emergency]}
+      - {var: sn_template_name, q: "AAP workflow or template this change covers", type: text, default: "", required: true}
+      - {var: sn_short_description, q: "Short description", type: text, default: "", required: true}
+      - {var: sn_planned_start, q: "Planned start UTC (YYYY-MM-DD HH:MM:SS)", type: text, default: "", required: true}
+      - {var: sn_planned_end, q: "Planned end UTC (YYYY-MM-DD HH:MM:SS)", type: text, default: "", required: true}
+      - {var: sn_affected_hosts, q: "Affected hosts / AAP limit (comma separated)", type: text, default: "", required: false}
+      - {var: sn_assignment_group, q: "Assignment group (blank = default)", type: text, default: "", required: false}
+      - {var: sn_risk, q: "Risk", type: multiplechoice, default: moderate, choices: [high, moderate, low]}
+  - id: sn_change_gate
+    domain: itsm
+    name: SN - Change gate
+    description: Read-only gate. Fails unless sn_change_number exists, is approved, is in scheduled or implement state and now is inside its planned window (optionally that the launch limit hosts are covered by the change CIs). First node of every WF workflow. Returns aap_ops_result.
+    changes: false
+    target: servicenow
+    survey:
+      - {var: sn_change_number, q: "Change request number (CHG...)", type: text, default: "", required: true}
+  - id: sn_change_start
+    domain: itsm
+    name: SN - Change start
+    description: Writes ServiceNow records only. Moves an approved change to Implement and adds a work note linking the AAP workflow job. Runs automatically after the approval node of every WF workflow.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_change_number, q: "Change request number (CHG...)", type: text, default: "", required: true}
+  - id: sn_change_close
+    domain: itsm
+    name: SN - Change close
+    description: Writes ServiceNow records only. Moves a change to Review with close code successful, successful_issues or unsuccessful and close notes built from the AAP job results. Runs automatically at the end of every WF workflow.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_change_number, q: "Change request number (CHG...)", type: text, default: "", required: true}
+      - {var: sn_close_code, q: "Close code", type: multiplechoice, default: successful, choices: [successful, successful_issues, unsuccessful]}
+      - {var: sn_close_notes, q: "Additional close notes", type: textarea, default: "", required: false}
+  - id: sn_change_schedule
+    domain: itsm
+    name: SN - Upcoming and active changes
+    description: Read-only. Change requests that are scheduled or implementing within the next N days with window, approval, type and CIs; flags approved changes with no matching AAP run and expired windows. Returns aap_ops_result.
+    changes: false
+    target: servicenow
+    survey:
+      - {var: days, q: "Look ahead (days)", type: integer, default: 7, min: 1, max: 90}
+      - {var: sn_assignment_group, q: "Assignment group (blank = any)", type: text, default: "", required: false}
+  - id: sn_change_conflict_check
+    domain: itsm
+    name: SN - Change conflict check
+    description: Read-only. For a proposed window and host list, lists other changes whose windows overlap on the same configuration items and any blackout schedule overlaps. Returns aap_ops_result.
+    changes: false
+    target: servicenow
+    survey:
+      - {var: sn_planned_start, q: "Planned start UTC (YYYY-MM-DD HH:MM:SS)", type: text, default: "", required: true}
+      - {var: sn_planned_end, q: "Planned end UTC (YYYY-MM-DD HH:MM:SS)", type: text, default: "", required: true}
+      - {var: sn_affected_hosts, q: "Affected hosts (comma separated)", type: text, default: "", required: false}
+  - id: sn_problem_create
+    domain: itsm
+    name: SN - Create problem
+    description: Writes ServiceNow records only. Opens a problem record and links the listed incidents to it. Returns the problem number.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_short_description, q: "Short description", type: text, default: "", required: true}
+      - {var: sn_description, q: "Description", type: textarea, default: "", required: false}
+      - {var: sn_incident_numbers, q: "Related incidents (comma separated INC numbers)", type: text, default: "", required: false}
+      - {var: sn_impact, q: "Impact", type: multiplechoice, default: medium, choices: [high, medium, low]}
+      - {var: sn_urgency, q: "Urgency", type: multiplechoice, default: medium, choices: [high, medium, low]}
+  - id: sn_problem_from_trend
+    domain: itsm
+    name: SN - Problem candidates from incident trend
+    description: Writes ServiceNow records when create_problems=yes. Groups incidents from the last N days by configuration item and correlation ID; groups at or above the threshold become problem candidates and, optionally, problems with the incidents linked. Returns aap_ops_result.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: days, q: "Look back (days)", type: integer, default: 30, min: 1, max: 365}
+      - {var: min_incidents, q: "Minimum incidents per group", type: integer, default: 3, min: 2, max: 100}
+      - {var: create_problems, q: "Create problem records", type: multiplechoice, default: "no", choices: ["yes", "no"]}
+  - id: sn_problem_rca
+    domain: itsm
+    name: SN - Problem root cause evidence
+    description: Writes ServiceNow records only. Collects evidence for a problem - linked incidents, AAP job failures on the same hosts and templates, and failing tasks - and posts it as a root cause analysis problem task. Returns aap_ops_result.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_problem_number, q: "Problem number (PRB...)", type: text, default: "", required: true}
+      - {var: days, q: "AAP job history to review (days)", type: integer, default: 30, min: 1, max: 365}
+  - id: sn_problem_update
+    domain: itsm
+    name: SN - Update or resolve problem
+    description: Writes ServiceNow records only. Records cause and fix notes, moves the problem state, or resolves it with a resolution code (fix_applied, risk_accepted, duplicate, canceled). Returns the updated problem.
+    changes: false
+    writes: servicenow
+    target: servicenow
+    survey:
+      - {var: sn_problem_number, q: "Problem number (PRB...)", type: text, default: "", required: true}
+      - {var: sn_problem_state, q: "New state", type: multiplechoice, default: unchanged, choices: [unchanged, assess, root_cause_analysis, fix_in_progress, resolved, closed]}
+      - {var: sn_cause_notes, q: "Cause notes", type: textarea, default: "", required: false}
+      - {var: sn_fix_notes, q: "Fix notes", type: textarea, default: "", required: false}
+      - {var: sn_resolution_code, q: "Resolution code (when resolving)", type: multiplechoice, default: fix_applied, choices: [fix_applied, risk_accepted, duplicate, canceled]}
+  - id: sn_problem_list
+    domain: itsm
+    name: SN - Open problems report
+    description: Read-only. Open problems with state, age, linked incident count and known-error flag. Returns aap_ops_result.
+    changes: false
+    target: servicenow
+    survey:
+      - {var: sn_assignment_group, q: "Assignment group (blank = any)", type: text, default: "", required: false}
+  - id: sn_cmdb_sync
+    domain: itsm
+    name: SN - CMDB server CI sync
+    description: Writes ServiceNow CMDB records only. Creates or updates server configuration items from host facts (name, OS, version, serial, IP, CPU, memory). Returns aap_ops_result.
+    changes: false
+    writes: servicenow
+    target: hosts
+    os: [rhel, ubuntu, windows]
+    survey:
+      - {var: sn_dry_run, q: "Dry run (report differences only)", type: multiplechoice, default: "yes", choices: ["yes", "no"]}

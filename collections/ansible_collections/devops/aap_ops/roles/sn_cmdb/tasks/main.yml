@@ -1,0 +1,3 @@
+---
+- name: Default to host facts
+  ansible.builtin.include_tasks: host_facts.yml

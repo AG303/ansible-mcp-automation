@@ -1,0 +1,21 @@
+---
+# Runs on each host (after devops.aap_ops.common). Builds the desired CI record.
+- name: Build desired CI
+  ansible.builtin.set_fact:
+    _sn_ci:
+      class: "{{ sn_cmdb_class_map[aap_ops_os] }}"
+      name: "{{ inventory_hostname_short | lower if aap_ops_is_windows else (ansible_hostname | default(inventory_hostname_short)) | lower }}"
+      fqdn: "{{ ansible_fqdn | default(inventory_hostname) | lower }}"
+      os: "{{ ansible_distribution | default('') }}"
+      os_version: "{{ ansible_distribution_version | default('') }}"
+      serial_number: "{{ ansible_product_serial | default('') if ansible_product_serial | default('') not in ['NA', 'None', '0'] else '' }}"
+      ip_address: "{{ ansible_default_ipv4.address | default((ansible_ip_addresses | default([]) | ansible.utils.ipv4 | first) | default('')) }}"
+      cpu_count: "{{ ansible_processor_vcpus | default(ansible_processor_count | default('')) | string }}"
+      ram: "{{ ansible_memtotal_mb | default('') | string }}"
+
+- name: Record result
+  ansible.builtin.set_fact:
+    aap_ops_host_result:
+      status: ok
+      summary: "facts collected: {{ _sn_ci.os }} {{ _sn_ci.os_version }}, {{ _sn_ci.cpu_count }} vCPU, {{ _sn_ci.ram }} MB, {{ _sn_ci.ip_address }}"
+      details: "{{ _sn_ci }}"

@@ -1,0 +1,32 @@
+---
+# PATCH - Patch compliance report
+# Domain: Patch Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Days since last patch, pending update counts and reboot state per host ranked by risk across the
+# fleet. Returns aap_ops_result.
+# Survey variables: max_days_since_patch
+
+- name: PATCH - Patch compliance report
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: PATCH - Patch compliance report
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run patch_manage/compliance_report
+      ansible.builtin.include_role:
+        name: devops.aap_ops.patch_manage
+        tasks_from: compliance_report
+
+- name: Report - PATCH - Patch compliance report
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PATCH - Patch compliance report
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

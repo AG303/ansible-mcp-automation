@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  author: DevOps Automation
+  description: ServiceNow connection checks and shared helpers (incident upsert, work notes) built on servicenow.itsm.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms:
+    - {name: EL, versions: ["9"]}
+dependencies: []

@@ -1,0 +1,33 @@
+---
+# Apply the generated config-as-code to AAP 2.6 with infra.aap_configuration.
+#
+#   python3 tools/gen_config.py            # regenerate vars from catalog.yml
+#   python3 tests/validate_config.py       # referential checks
+#   ansible-playbook aap_config/configure_aap.yml -e @aap_config/vault.yml --ask-vault-pass
+#
+# Connection: aap_hostname (gateway URL, e.g. https://aap.apps.ocp.example.com) and
+# aap_token (or aap_username/aap_password) as extra vars or AAP_HOSTNAME / AAP_TOKEN env vars.
+# Order is handled by the dispatch role: labels -> credential types -> credentials -> EEs ->
+# projects -> inventories -> job templates -> workflows -> teams/RBAC.
+- name: Configure AAP Ops content in Ansible Automation Platform
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_hostname: "{{ lookup('ansible.builtin.env', 'AAP_HOSTNAME') }}"
+    aap_token: "{{ lookup('ansible.builtin.env', 'AAP_TOKEN') | default(omit, true) }}"
+    aap_validate_certs: "{{ lookup('ansible.builtin.env', 'AAP_VALIDATE_CERTS') | default(true, true) | bool }}"
+    aap_configuration_secure_logging: true
+  pre_tasks:
+    - name: Require a platform URL
+      ansible.builtin.assert:
+        that: aap_hostname | length > 0
+        fail_msg: Set aap_hostname (or AAP_HOSTNAME) to the platform gateway URL.
+        quiet: true
+
+    - name: Load generated configuration
+      ansible.builtin.include_vars:
+        dir: vars
+        extensions: [yml]
+  roles:
+    - role: infra.aap_configuration.dispatch

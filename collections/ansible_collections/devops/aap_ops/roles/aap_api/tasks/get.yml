@@ -1,0 +1,52 @@
+---
+# Paginated GET. Inputs: aap_api_path (absolute path or full URL), aap_api_query (dict).
+# Output fact: aap_api_results (list of all result objects), aap_api_count.
+- name: "GET first page {{ aap_api_path }}"
+  ansible.builtin.uri:
+    url: "{{ _aap_get_url }}"
+    method: GET
+    headers: "{{ _aap_api_headers }}"
+    url_username: "{{ aap_api_username if _aap_api_basic else omit }}"
+    url_password: "{{ aap_api_password if _aap_api_basic else omit }}"
+    force_basic_auth: "{{ _aap_api_basic }}"
+    validate_certs: "{{ aap_api_validate_certs }}"
+    timeout: "{{ aap_api_timeout }}"
+    status_code: 200
+  register: _aap_get_first
+  no_log: false
+  vars:
+    _aap_get_url: >-
+      {{ (aap_api_path if aap_api_path.startswith('http') else _aap_api_base ~ aap_api_path)
+         ~ '?' ~ ((aap_api_query | default({})) | combine({'page_size': aap_api_page_size, 'page': 1}) | urlencode) }}
+
+- name: Compute remaining pages
+  ansible.builtin.set_fact:
+    aap_api_count: "{{ _aap_get_first.json.count | default(_aap_get_first.json.results | default([]) | length) | int }}"
+    _aap_get_pages: >-
+      {{ [((_aap_get_first.json.count | default(0) | int) / (aap_api_page_size | int)) | round(0, 'ceil') | int,
+          aap_api_max_pages | int] | min }}
+
+- name: "GET remaining pages {{ aap_api_path }}"
+  when: _aap_get_pages | int > 1
+  ansible.builtin.uri:
+    url: >-
+      {{ (aap_api_path if aap_api_path.startswith('http') else _aap_api_base ~ aap_api_path)
+         ~ '?' ~ ((aap_api_query | default({})) | combine({'page_size': aap_api_page_size, 'page': item}) | urlencode) }}
+    method: GET
+    headers: "{{ _aap_api_headers }}"
+    url_username: "{{ aap_api_username if _aap_api_basic else omit }}"
+    url_password: "{{ aap_api_password if _aap_api_basic else omit }}"
+    force_basic_auth: "{{ _aap_api_basic }}"
+    validate_certs: "{{ aap_api_validate_certs }}"
+    timeout: "{{ aap_api_timeout }}"
+    status_code: 200
+  loop: "{{ range(2, (_aap_get_pages | int) + 1) | list }}"
+  loop_control:
+    label: "page {{ item }}"
+  register: _aap_get_rest
+
+- name: Combine pages
+  ansible.builtin.set_fact:
+    aap_api_results: >-
+      {{ (_aap_get_first.json.results | default([]))
+         + ((_aap_get_rest.results | default([])) | selectattr('json', 'defined') | map(attribute='json.results') | flatten) }}

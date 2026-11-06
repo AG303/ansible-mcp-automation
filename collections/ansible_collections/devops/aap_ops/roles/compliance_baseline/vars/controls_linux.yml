@@ -1,0 +1,271 @@
+---
+# Linux control catalogue. check: bash snippet, exit 0 = compliant.
+# fix.type: sshd | sysctl | lineinfile | service | package_absent | package_present | modprobe | file_mode |
+#           audit_rules | selinux | apparmor | firewall | command | manual
+# The section field names the CIS / STIG topic so findings can be mapped to the
+# official benchmark IDs used in your organisation.
+compliance_baseline_linux_controls:
+  - id: L-SSH-01
+    title: SSH root login disabled
+    section: "CIS 5.1 sshd PermitRootLogin / STIG SSH root logon"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: high
+    check: "sshd -T 2>/dev/null | grep -qi '^permitrootlogin no$'"
+    fix: {type: sshd, key: PermitRootLogin, value: "no"}
+  - id: L-SSH-02
+    title: SSH empty passwords disabled
+    section: "CIS 5.1 sshd PermitEmptyPasswords / STIG SSH empty passwords"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: high
+    check: "sshd -T 2>/dev/null | grep -qi '^permitemptypasswords no$'"
+    fix: {type: sshd, key: PermitEmptyPasswords, value: "no"}
+  - id: L-SSH-03
+    title: SSH MaxAuthTries limited
+    section: "CIS 5.1 sshd MaxAuthTries"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(sshd -T 2>/dev/null | awk '/^maxauthtries/ {print $2}') -le {{ _v.ssh_max_auth_tries }} ]"
+    fix: {type: sshd, key: MaxAuthTries, value: "{{ _v.ssh_max_auth_tries }}"}
+  - id: L-SSH-04
+    title: SSH idle timeout configured
+    section: "CIS 5.1 sshd ClientAliveInterval / STIG SSH session timeout"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "v=$(sshd -T 2>/dev/null | awk '/^clientaliveinterval/ {print $2}'); [ \"$v\" -gt 0 ] && [ \"$v\" -le {{ _v.ssh_client_alive_interval }} ]"
+    fix: {type: sshd, key: ClientAliveInterval, value: "{{ _v.ssh_client_alive_interval }}"}
+  - id: L-SSH-05
+    title: SSH X11 forwarding disabled
+    section: "CIS 5.1 sshd X11Forwarding / STIG X11 forwarding"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "sshd -T 2>/dev/null | grep -qi '^x11forwarding no$'"
+    fix: {type: sshd, key: X11Forwarding, value: "no"}
+  - id: L-SSH-06
+    title: SSH warning banner configured
+    section: "CIS 5.1 sshd Banner / STIG DoD notice and consent banner"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: low
+    check: "sshd -T 2>/dev/null | grep -Eqi '^banner /'"
+    fix: {type: sshd, key: Banner, value: /etc/issue.net}
+  - id: L-SSH-07
+    title: SSH host-based authentication disabled
+    section: "CIS 5.1 sshd HostbasedAuthentication"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "sshd -T 2>/dev/null | grep -qi '^hostbasedauthentication no$'"
+    fix: {type: sshd, key: HostbasedAuthentication, value: "no"}
+  - id: L-PWD-01
+    title: Password minimum length
+    section: "CIS 5.3 pam_pwquality minlen / STIG password length"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "v=$(grep -Eh '^\\s*minlen\\s*=' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null | tail -1 | awk -F= '{gsub(/ /,\"\",$2); print $2}'); [ -n \"$v\" ] && [ \"$v\" -ge {{ _v.pass_min_len }} ]"
+    fix: {type: lineinfile, path: /etc/security/pwquality.conf, regexp: '^\s*#?\s*minlen\s*=', line: "minlen = {{ _v.pass_min_len }}", package: "{{ 'libpwquality' if aap_ops_os == 'rhel' else 'libpam-pwquality' }}"}
+  - id: L-PWD-02
+    title: Password maximum age
+    section: "CIS 5.4 PASS_MAX_DAYS / STIG password lifetime"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "v=$(awk '/^PASS_MAX_DAYS/ {print $2}' /etc/login.defs); [ -n \"$v\" ] && [ \"$v\" -le {{ _v.pass_max_days }} ]"
+    fix: {type: lineinfile, path: /etc/login.defs, regexp: '^\s*#?\s*PASS_MAX_DAYS', line: "PASS_MAX_DAYS   {{ _v.pass_max_days }}"}
+  - id: L-PWD-03
+    title: Password minimum age
+    section: "CIS 5.4 PASS_MIN_DAYS / STIG password minimum lifetime"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: low
+    check: "v=$(awk '/^PASS_MIN_DAYS/ {print $2}' /etc/login.defs); [ -n \"$v\" ] && [ \"$v\" -ge {{ _v.pass_min_days }} ]"
+    fix: {type: lineinfile, path: /etc/login.defs, regexp: '^\s*#?\s*PASS_MIN_DAYS', line: "PASS_MIN_DAYS   {{ _v.pass_min_days }}"}
+  - id: L-PWD-04
+    title: Account lockout after failed logins
+    section: "CIS 5.3 pam_faillock deny / STIG consecutive invalid logon attempts"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "v=$(grep -E '^\\s*deny\\s*=' /etc/security/faillock.conf 2>/dev/null | awk -F= '{gsub(/ /,\"\",$2); print $2}'); [ -n \"$v\" ] && [ \"$v\" -gt 0 ] && [ \"$v\" -le {{ _v.lockout_attempts }} ]"
+    fix: {type: lineinfile, path: /etc/security/faillock.conf, regexp: '^\s*#?\s*deny\s*=', line: "deny = {{ _v.lockout_attempts }}"}
+  - id: L-ACC-01
+    title: No accounts with empty passwords
+    section: "CIS 7.2 shadowed passwords / STIG blank passwords"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: high
+    check: "! awk -F: '($2 == \"\") {found=1} END {exit !found}' /etc/shadow"
+    fix: {type: command, cmd: "awk -F: '($2 == \"\") {print $1}' /etc/shadow | xargs -r -n1 passwd -l"}
+  - id: L-ACC-02
+    title: Root is the only UID 0 account
+    section: "CIS 7.2 UID 0 / STIG unique UID 0"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: high
+    check: "[ \"$(awk -F: '($3 == 0) {print $1}' /etc/passwd)\" = 'root' ]"
+    fix: {type: manual}
+  - id: L-ACC-03
+    title: Shell inactivity timeout (TMOUT)
+    section: "CIS 5.4 TMOUT / STIG session inactivity"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: low
+    check: "grep -Eqs '^\\s*(readonly\\s+)?TMOUT=([0-9]+)' /etc/profile.d/*.sh /etc/profile && v=$(grep -Ehs '^\\s*(readonly\\s+)?TMOUT=' /etc/profile.d/*.sh /etc/profile | tail -1 | sed -E 's/.*TMOUT=([0-9]+).*/\\1/'); [ \"$v\" -gt 0 ] && [ \"$v\" -le {{ _v.shell_timeout }} ]"
+    fix: {type: lineinfile, path: /etc/profile.d/99-aap-ops-tmout.sh, regexp: 'TMOUT=', line: "readonly TMOUT={{ _v.shell_timeout }}; export TMOUT", create: true}
+  - id: L-AUD-01
+    title: auditd installed and enabled
+    section: "CIS 6.3 auditd / STIG audit service"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "systemctl is-enabled auditd >/dev/null 2>&1 && systemctl is-active auditd >/dev/null 2>&1"
+    fix: {type: package_present, packages: "{{ ['audit'] if aap_ops_os == 'rhel' else ['auditd', 'audispd-plugins'] }}", service: auditd}
+  - id: L-AUD-02
+    title: Audit rules for identity, sudoers and time changes
+    section: "CIS 6.3 audit rules / STIG audit account modification"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "auditctl -l 2>/dev/null | grep -q '/etc/passwd' && auditctl -l | grep -q '/etc/sudoers' && auditctl -l | grep -q 'time-change'"
+    fix: {type: audit_rules}
+  - id: L-NET-01
+    title: IP forwarding disabled
+    section: "CIS 3.3 net.ipv4.ip_forward"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(sysctl -n net.ipv4.ip_forward) -eq 0 ]"
+    fix: {type: sysctl, name: net.ipv4.ip_forward, value: "0"}
+  - id: L-NET-02
+    title: ICMP redirects not accepted
+    section: "CIS 3.3 accept_redirects / STIG ICMP redirects"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(sysctl -n net.ipv4.conf.all.accept_redirects) -eq 0 ] && [ $(sysctl -n net.ipv4.conf.default.accept_redirects) -eq 0 ]"
+    fix: {type: sysctl, name: "net.ipv4.conf.all.accept_redirects,net.ipv4.conf.default.accept_redirects", value: "0"}
+  - id: L-NET-03
+    title: ICMP redirects not sent
+    section: "CIS 3.3 send_redirects"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(sysctl -n net.ipv4.conf.all.send_redirects) -eq 0 ] && [ $(sysctl -n net.ipv4.conf.default.send_redirects) -eq 0 ]"
+    fix: {type: sysctl, name: "net.ipv4.conf.all.send_redirects,net.ipv4.conf.default.send_redirects", value: "0"}
+  - id: L-NET-04
+    title: TCP SYN cookies enabled
+    section: "CIS 3.3 tcp_syncookies"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(sysctl -n net.ipv4.tcp_syncookies) -eq 1 ]"
+    fix: {type: sysctl, name: net.ipv4.tcp_syncookies, value: "1"}
+  - id: L-NET-05
+    title: Host firewall active
+    section: "CIS 4 host firewall / STIG firewall enabled"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: high
+    check: "systemctl is-active firewalld >/dev/null 2>&1 || (command -v ufw >/dev/null && ufw status | grep -q 'Status: active') || systemctl is-active nftables >/dev/null 2>&1"
+    fix: {type: firewall}
+  - id: L-KRN-01
+    title: ASLR enabled
+    section: "CIS 1.5 kernel.randomize_va_space / STIG ASLR"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(sysctl -n kernel.randomize_va_space) -eq 2 ]"
+    fix: {type: sysctl, name: kernel.randomize_va_space, value: "2"}
+  - id: L-KRN-02
+    title: SUID core dumps disabled
+    section: "CIS 1.5 fs.suid_dumpable"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: low
+    check: "[ $(sysctl -n fs.suid_dumpable) -eq 0 ]"
+    fix: {type: sysctl, name: fs.suid_dumpable, value: "0"}
+  - id: L-KRN-03
+    title: cramfs and usb-storage modules disabled
+    section: "CIS 1.1 filesystem kernel modules / STIG USB mass storage"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: low
+    check: "modprobe -n -v cramfs 2>/dev/null | grep -Eq 'install /bin/(true|false)' && modprobe -n -v usb-storage 2>/dev/null | grep -Eq 'install /bin/(true|false)'"
+    fix: {type: modprobe, modules: [cramfs, usb-storage]}
+  - id: L-MAC-01
+    title: SELinux enforcing
+    section: "CIS 1.3 SELinux / STIG SELinux enforcing"
+    profiles: [cis, stig]
+    os: [rhel]
+    severity: high
+    check: "[ \"$(getenforce)\" = 'Enforcing' ]"
+    fix: {type: selinux}
+  - id: L-MAC-02
+    title: AppArmor enabled
+    section: "CIS 1.3 AppArmor"
+    profiles: [cis, stig]
+    os: [ubuntu]
+    severity: high
+    check: "aa-status --enabled 2>/dev/null"
+    fix: {type: apparmor}
+  - id: L-FIL-01
+    title: /etc/shadow permissions restricted
+    section: "CIS 7.1 /etc/shadow permissions"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(( 0$(stat -c %a /etc/shadow) & 0137 )) -eq 0 ] && [ \"$(stat -c %U /etc/shadow)\" = root ]"
+    fix: {type: file_mode, path: /etc/shadow, mode: "{{ '0000' if aap_ops_os == 'rhel' else '0640' }}", owner: root, group: "{{ 'root' if aap_ops_os == 'rhel' else 'shadow' }}"}
+  - id: L-FIL-02
+    title: /etc/passwd permissions 0644
+    section: "CIS 7.1 /etc/passwd permissions"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "[ $(( 0$(stat -c %a /etc/passwd) & 0133 )) -eq 0 ] && [ \"$(stat -c %U /etc/passwd)\" = root ]"
+    fix: {type: file_mode, path: /etc/passwd, mode: "0644", owner: root, group: root}
+  - id: L-FIL-03
+    title: /etc/crontab permissions 0600
+    section: "CIS 2.4 cron permissions"
+    profiles: [cis]
+    os: [rhel, ubuntu]
+    severity: low
+    check: "[ ! -e /etc/crontab ] || [ $(( 0$(stat -c %a /etc/crontab) & 0077 )) -eq 0 ]"
+    fix: {type: file_mode, path: /etc/crontab, mode: "0600", owner: root, group: root}
+  - id: L-PKG-01
+    title: Legacy cleartext services not installed
+    section: "CIS 2.2 telnet/rsh/tftp clients and servers / STIG telnet"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: high
+    check: "! (rpm -q telnet-server rsh-server tftp-server telnet 2>/dev/null | grep -qv 'not installed') && ! (dpkg -l telnetd rsh-server tftpd-hpa telnet 2>/dev/null | grep -q '^ii')"
+    fix: {type: package_absent, packages: "{{ ['telnet-server', 'rsh-server', 'tftp-server', 'telnet'] if aap_ops_os == 'rhel' else ['telnetd', 'rsh-server', 'tftpd-hpa', 'telnet'] }}"}
+  - id: L-PKG-02
+    title: Package signature checking enabled
+    section: "CIS 1.2 gpgcheck / STIG signed packages"
+    profiles: [cis, stig]
+    os: [rhel]
+    severity: high
+    check: "grep -Eq '^\\s*gpgcheck\\s*=\\s*(1|True)' /etc/dnf/dnf.conf && ! grep -Eqs '^\\s*gpgcheck\\s*=\\s*0' /etc/yum.repos.d/*.repo"
+    fix: {type: lineinfile, path: /etc/dnf/dnf.conf, regexp: '^\s*gpgcheck\s*=', line: "gpgcheck=1"}
+  - id: L-TIM-01
+    title: Time synchronization service enabled
+    section: "CIS 2.3 time synchronization / STIG clock sync"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: medium
+    check: "systemctl is-active chronyd >/dev/null 2>&1 || systemctl is-active chrony >/dev/null 2>&1 || systemctl is-active systemd-timesyncd >/dev/null 2>&1"
+    fix: {type: package_present, packages: [chrony], service: "{{ 'chronyd' if aap_ops_os == 'rhel' else 'chrony' }}"}
+  - id: L-LOG-01
+    title: Persistent journald storage
+    section: "CIS 6.2 journald Storage=persistent"
+    profiles: [cis, stig]
+    os: [rhel, ubuntu]
+    severity: low
+    check: "grep -Ehsq '^\\s*Storage\\s*=\\s*persistent' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf || [ -d /var/log/journal ]"
+    fix: {type: lineinfile, path: /etc/systemd/journald.conf, regexp: '^\s*#?\s*Storage\s*=', line: "Storage=persistent", notify_service: systemd-journald}

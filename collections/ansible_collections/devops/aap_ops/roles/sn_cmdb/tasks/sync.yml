@@ -1,0 +1,82 @@
+---
+# localhost: compares desired CIs with ServiceNow and creates/updates them unless dry run.
+- name: Collect desired CIs from hosts
+  ansible.builtin.set_fact:
+    _desired: >-
+      {%- set out = [] -%}
+      {%- for h in hostvars['localhost']._aap_ops_targets | default([]) if hostvars[h]._sn_ci is defined -%}
+      {%-   set _ = out.append(hostvars[h]._sn_ci | combine({'host': h})) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Existing CIs
+  when: _desired | length > 0
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+  vars:
+    sn_q_table: cmdb_ci_server
+    sn_q_query: "nameIN{{ _desired | map(attribute='name') | join(',') }}"
+    sn_q_fields: "{{ ['sys_id', 'name', 'sys_class_name'] + sn_cmdb_compare_fields }}"
+    sn_q_limit: 2000
+
+- name: Plan
+  ansible.builtin.set_fact:
+    _plan: >-
+      {%- set out = [] -%}
+      {%- for d in _desired -%}
+      {%-   set cur = (sn_q_records | default([])) | selectattr('name', 'equalto', d.name) | list -%}
+      {%-   if cur | length == 0 -%}
+      {%-     set _ = out.append({'host': d.host, 'name': d.name, 'action': 'create', 'class': d.class, 'data': d, 'diff': []}) -%}
+      {%-   else -%}
+      {%-     set diff = [] -%}
+      {%-     for f in sn_cmdb_compare_fields if d[f] | string and (d[f] | string) != (cur[0][f] | default('') | string) -%}
+      {%-       set _ = diff.append(f ~ ': ' ~ cur[0][f] | default('') ~ ' -> ' ~ d[f]) -%}
+      {%-     endfor -%}
+      {%-     set _ = out.append({'host': d.host, 'name': d.name, 'action': 'update' if diff else 'none', 'class': cur[0].sys_class_name,
+                                 'sys_id': cur[0].sys_id, 'data': d, 'diff': diff, 'duplicates': cur | length}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Enforce write cap
+  ansible.builtin.assert:
+    that: _plan | rejectattr('action', 'equalto', 'none') | list | length <= sn_cmdb_max_writes | int
+    fail_msg: "{{ _plan | rejectattr('action', 'equalto', 'none') | list | length }} CI writes planned; cap is {{ sn_cmdb_max_writes }}."
+    quiet: true
+
+- name: Create CIs
+  when: not (sn_dry_run | default('yes') | bool)
+  servicenow.itsm.api:
+    resource: "{{ item.class }}"
+    action: post
+    data: "{{ item.data | dict2items | rejectattr('key', 'in', ['class', 'host']) | items2dict | combine({'short_description': 'Managed by Ansible Automation Platform'}) }}"
+  loop: "{{ _plan | selectattr('action', 'equalto', 'create') | list }}"
+  loop_control: {label: "{{ item.name }}"}
+
+- name: Update CIs
+  when: not (sn_dry_run | default('yes') | bool)
+  servicenow.itsm.api:
+    resource: "{{ item.class }}"
+    action: patch
+    sys_id: "{{ item.sys_id }}"
+    data: "{{ item.data | dict2items | selectattr('key', 'in', sn_cmdb_compare_fields) | rejectattr('value', 'equalto', '') | items2dict }}"
+  loop: "{{ _plan | selectattr('action', 'equalto', 'update') | list }}"
+  loop_control: {label: "{{ item.name }}"}
+
+- name: Build report rows
+  ansible.builtin.set_fact:
+    aap_ops_report_rows: >-
+      {%- set dry = sn_dry_run | default('yes') | bool -%}
+      {%- set out = [{'host': 'summary', 'status': 'ok',
+           'summary': ('DRY RUN - ' if dry else '') ~ (_plan | selectattr('action', 'equalto', 'create') | list | length) ~ ' to create, '
+                      ~ (_plan | selectattr('action', 'equalto', 'update') | list | length) ~ ' to update, '
+                      ~ (_plan | selectattr('action', 'equalto', 'none') | list | length) ~ ' in sync', 'details': {}}] -%}
+      {%- for h in hostvars['localhost']._aap_ops_targets | default([]) if hostvars[h]._sn_ci is not defined -%}
+      {%-   set _ = out.append({'host': h, 'status': 'fail', 'summary': (hostvars[h].aap_ops_host_result | default({})).summary | default('no facts (unreachable)'), 'details': {}}) -%}
+      {%- endfor -%}
+      {%- for p in _plan -%}
+      {%-   set _ = out.append({'host': p.host, 'status': 'ok' if p.action == 'none' else ('warn' if dry else 'changed'),
+               'summary': p.name ~ ' (' ~ p.class ~ '): ' ~ ({'create': 'new CI', 'update': p.diff | join('; '), 'none': 'in sync'}[p.action])
+                          ~ (' [would ' ~ p.action ~ ']' if dry and p.action != 'none' else '') ~ ((' - ' ~ p.duplicates ~ ' CIs share this name') if p.duplicates | default(1) > 1 else ''),
+               'details': {'action': p.action, 'diff': p.diff}}) -%}
+      {%- endfor -%}
+      {{ out }}

@@ -1,0 +1,32 @@
+---
+# MON - Disk usage and largest directories
+# Domain: Server Monitoring. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Filesystem usage per mount/drive with thresholds and the largest directories under a path. Returns
+# aap_ops_result.
+# Survey variables: disk_warn_pct, disk_fail_pct, scan_path
+
+- name: MON - Disk usage and largest directories
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: MON - Disk usage and largest directories
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_monitor/disk_usage
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_monitor
+        tasks_from: disk_usage
+
+- name: Report - MON - Disk usage and largest directories
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: MON - Disk usage and largest directories
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

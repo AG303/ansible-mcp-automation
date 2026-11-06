@@ -1,0 +1,42 @@
+---
+- name: Top processes
+  block:
+    - name: Linux - top processes
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo '--- cpu'; ps -eo pid,user,pcpu,pmem,rss,etime,comm --sort=-pcpu | head -n {{ (top_n | default(10) | int) + 1 }}
+        echo '--- mem'; ps -eo pid,user,pcpu,pmem,rss,etime,comm --sort=-rss | head -n {{ (top_n | default(10) | int) + 1 }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: _tp_linux
+
+    - name: Windows - top processes
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $n = {{ top_n | default(10) | int }}
+        $p = Get-Process | Where-Object { $_.Id -ne 0 }
+        $fmt = { '{0,7} {1,-30} cpu_s={2,10:N1} ws_mb={3,8:N0}' -f $_.Id, $_.ProcessName, $_.CPU, ($_.WorkingSet64/1MB) }
+        '--- cpu'; $p | Sort-Object CPU -Descending | Select-Object -First $n | ForEach-Object $fmt
+        '--- mem'; $p | Sort-Object WorkingSet64 -Descending | Select-Object -First $n | ForEach-Object $fmt
+      changed_when: false
+      check_mode: false
+      register: _tp_win
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: ok
+          summary: "Top {{ top_n | default(10) }} processes by CPU and memory collected"
+          details:
+            by_cpu: "{{ _lines[1:_split | int] }}"
+            by_mem: "{{ _lines[_split | int + 1:] }}"
+      vars:
+        _lines: "{{ (_tp_win if aap_ops_is_windows else _tp_linux).stdout_lines }}"
+        _split: "{{ _lines.index('--- mem') }}"  # noqa: jinja[invalid]
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Top processes}

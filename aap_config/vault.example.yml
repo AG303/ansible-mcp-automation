@@ -1,0 +1,22 @@
+---
+# Copy to aap_config/vault.yml, fill in, then: ansible-vault encrypt aap_config/vault.yml
+# Never commit the unencrypted file.
+aap_ops_organization: Default
+aap_ops_git_url: https://git.example.com/devops/aap26-mcp-automation.git
+aap_ops_git_branch: main
+aap_ops_ee_image: registry.example.com/aap-ops/aap-ops-ee:1.0.0
+aap_ops_ocp_api_url: https://api.ocp.example.com:6443
+aap_ops_sn_instance_url: https://example.service-now.com
+aap_ops_approval_timeout: 14400   # seconds before an unapproved WF approval node expires
+
+vault_linux_username: svc-ansible
+vault_linux_ssh_key: |
+  -----BEGIN OPENSSH PRIVATE KEY-----
+  REPLACE_ME
+  -----END OPENSSH PRIVATE KEY-----
+vault_windows_username: EXAMPLE\svc-ansible
+vault_windows_password: REPLACE_ME
+vault_aap_ops_api_token: REPLACE_ME       # token of a service account with the roles in docs/GUARDRAILS.md
+vault_ocp_token: REPLACE_ME               # service account token in the AAP namespace
+vault_sn_username: aap.integration
+vault_sn_password: REPLACE_ME

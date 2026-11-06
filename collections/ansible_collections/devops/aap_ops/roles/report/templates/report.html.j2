@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>{{ aap_ops_report_title | e }}</title>
+<style>
+body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:24px;color:#28251d;background:#f7f6f2}
+h1{font-size:20px;margin:0 0 4px}.meta{color:#625f59;font-size:13px;margin-bottom:16px}
+table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid #d4d1ca;padding:6px 8px;text-align:left;vertical-align:top;font-size:13px}
+th{background:#eeeee8}.ok{color:#437a22}.warn{color:#964219}.fail{color:#a12c7b;font-weight:bold}.changed{color:#006494}
+pre{white-space:pre-wrap;margin:0;font-size:12px;max-height:240px;overflow:auto}
+</style></head><body>
+<h1>{{ aap_ops_report_title | e }}</h1>
+<div class="meta">Generated {{ _aap_ops_generated }} | Job {{ tower_job_id | default('local') }} |
+ok {{ _aap_ops_counts.ok }} - warn {{ _aap_ops_counts.warn }} - fail {{ _aap_ops_counts.fail }} - changed {{ _aap_ops_counts.changed }} - skipped {{ _aap_ops_counts.skipped }}</div>
+<table><thead><tr><th>Host</th><th>Status</th><th>Summary</th><th>Details</th></tr></thead><tbody>
+{% for r in _aap_ops_rows | sort(attribute='status') %}
+<tr><td>{{ r.host | e }}</td><td class="{{ r.status | e }}">{{ r.status | upper | e }}</td><td>{{ r.summary | e }}</td><td><pre>{{ r.details | to_nice_yaml(indent=2) | e }}</pre></td></tr>
+{% endfor %}
+</tbody></table></body></html>

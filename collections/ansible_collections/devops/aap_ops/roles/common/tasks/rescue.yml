@@ -1,0 +1,13 @@
+---
+# Shared rescue handler: converts a task failure into a "fail" host result.
+# include from a rescue: section with vars aap_ops_check_name.
+- name: Record failure
+  ansible.builtin.set_fact:
+    aap_ops_host_result:
+      status: fail
+      summary: >-
+        {{ aap_ops_check_name | default('Check') }} failed at "{{ ansible_failed_task.name | default('unknown task') }}":
+        {{ (ansible_failed_result.msg | default('') ~ ' ' ~ ansible_failed_result.stderr | default('')) | trim | truncate(400) }}
+      details:
+        task: "{{ ansible_failed_task.name | default('') }}"
+        rc: "{{ ansible_failed_result.rc | default(omit) }}"

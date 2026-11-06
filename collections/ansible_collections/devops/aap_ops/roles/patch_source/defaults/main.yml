@@ -1,0 +1,15 @@
+---
+# Selected per job by the patch_source survey answer; inventory/group vars below
+# provide the endpoints. Keep secrets (activation keys) in AAP credentials or vault.
+aap_ops_rhsm_org: ""
+aap_ops_rhsm_activation_key: ""
+aap_ops_satellite_url: ""            # https://satellite.example.com
+aap_ops_satellite_org: ""
+aap_ops_satellite_activation_key: ""
+aap_ops_dnf_mirror_baseurl: ""       # http://mirror.example.com/rhel9  (expects BaseOS/ and AppStream/ below)
+aap_ops_apt_mirror_url: ""           # http://mirror.example.com/ubuntu
+aap_ops_apt_security_mirror_url: ""  # defaults to aap_ops_apt_mirror_url
+aap_ops_wsus_url: ""                 # http://wsus.example.com:8530
+aap_ops_wsus_target_group: ""
+aap_ops_apt_vendor_url: http://archive.ubuntu.com/ubuntu
+aap_ops_apt_vendor_security_url: http://security.ubuntu.com/ubuntu

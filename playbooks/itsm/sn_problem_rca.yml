@@ -1,0 +1,30 @@
+---
+# SN - Problem root cause evidence
+# Domain: ServiceNow Incident. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Writes ServiceNow records only. Collects evidence for a problem - linked incidents, AAP job failures on the
+# same hosts and templates, and failing tasks - and posts it as a root cause analysis problem task. Returns
+# aap_ops_result.
+# Survey variables: sn_problem_number, days
+
+- name: SN - Problem root cause evidence
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Problem root cause evidence
+  tasks:
+    - name: ServiceNow connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: AAP API connection (job evidence / workflow context)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+    - name: Run sn_problem/rca
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_problem
+        tasks_from: rca
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

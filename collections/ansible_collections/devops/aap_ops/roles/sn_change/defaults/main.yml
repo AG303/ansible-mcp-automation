@@ -1,0 +1,8 @@
+---
+# Gate policy
+sn_change_gate_states: [scheduled, implement]
+sn_change_gate_require_ci_coverage: true     # workflow limit hosts must be CIs on the change (when the change lists CIs)
+sn_change_gate_require_template_match: true  # change correlation aap_ops:change:<name> must match the workflow
+sn_change_gate_grace_minutes: 0              # allow starting this many minutes before planned start
+sn_change_close_codes: [successful, successful_issues, unsuccessful]
+sn_change_schedule_limit: 200

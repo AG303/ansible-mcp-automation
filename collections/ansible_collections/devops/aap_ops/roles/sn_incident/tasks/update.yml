@@ -1,0 +1,53 @@
+---
+- name: Update incident
+  block:
+    - name: Look up incident
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: lookup}
+      vars: {sn_lookup_table: incident, sn_lookup_number: "{{ sn_incident_number }}"}
+
+    - name: Validate resolve input
+      when: sn_incident_state | default('unchanged') in ['resolved', 'closed']
+      ansible.builtin.assert:
+        that:
+          - sn_close_code | default('') in sn_incident_close_codes
+          - sn_close_notes | default('') | trim | length > 0
+        fail_msg: "Resolving needs sn_close_notes and a valid sn_close_code ({{ sn_incident_close_codes | join(', ') }})."
+        quiet: true
+
+    - name: Build update payload
+      ansible.builtin.set_fact:
+        _upd: >-
+          {{ {}
+             | combine({'state': sn_incident_state_map[sn_incident_state]} if sn_incident_state | default('unchanged') != 'unchanged' else {})
+             | combine({'close_code': sn_close_code, 'close_notes': sn_close_notes} if sn_incident_state | default('unchanged') in ['resolved', 'closed'] else {})
+             | combine({'work_notes': _note} if sn_work_note | default('') | trim else {}) }}
+      vars:
+        _note: "{{ sn_work_note | default('') ~ '\n\n(AAP job ' ~ (tower_job_id | default('local') | string) ~ ')' }}"
+
+    - name: Require something to change
+      ansible.builtin.assert:
+        that: _upd | length > 0
+        fail_msg: Nothing to update - set sn_incident_state and/or sn_work_note.
+        quiet: true
+
+    - name: Patch incident
+      servicenow.itsm.api:
+        resource: incident
+        action: patch
+        sys_id: "{{ sn_record.sys_id }}"
+        data: "{{ _upd }}"
+      register: _patched
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ sn_record.number }}"
+            status: changed
+            summary: >-
+              {{ sn_record.number }} updated ({{ _upd.keys() | list | join(', ') }});
+              state {{ sn_record_display.state }} -> {{ sn_incident_state if sn_incident_state | default('unchanged') != 'unchanged' else sn_record_display.state }}
+            details: {short_description: "{{ sn_record.short_description }}", fields: "{{ _upd.keys() | list }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Update incident}

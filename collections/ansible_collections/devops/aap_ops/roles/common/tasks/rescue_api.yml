@@ -1,0 +1,16 @@
+---
+# Rescue handler for API-target roles (AAP, OpenShift, ServiceNow) running on
+# localhost: produces a single failing report row so the job still publishes
+# aap_ops_result with the reason. Include with vars aap_ops_check_name.
+- name: Record API failure
+  ansible.builtin.set_fact:
+    aap_ops_report_rows:
+      - host: "{{ aap_ops_check_name | default('api') }}"
+        status: fail
+        summary: >-
+          {{ aap_ops_check_name | default('Check') }} failed at "{{ ansible_failed_task.name | default('unknown task') }}":
+          {{ (ansible_failed_result.msg | default('') ~ ' ' ~ (ansible_failed_result.json.detail | default(ansible_failed_result.json | default('') | string)))
+             | trim | truncate(500) }}
+        details:
+          task: "{{ ansible_failed_task.name | default('') }}"
+          status_code: "{{ ansible_failed_result.status | default(omit) }}"

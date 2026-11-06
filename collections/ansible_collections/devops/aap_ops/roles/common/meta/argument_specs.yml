@@ -1,0 +1,7 @@
+---
+argument_specs:
+  main:
+    short_description: Bootstrap facts, OS detection and target tracking for host plays
+    options:
+      aap_ops_gather_subset: {type: list, elements: str, default: [min, hardware, network, virtual, mounts], description: "Fact subsets to gather"}
+      aap_ops_supported_os: {type: list, elements: str, default: [rhel, ubuntu, windows], description: "OS values this template supports"}

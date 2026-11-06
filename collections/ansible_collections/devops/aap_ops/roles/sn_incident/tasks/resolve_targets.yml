@@ -1,0 +1,49 @@
+---
+# localhost: reads the incident and resolves which inventory hosts it concerns.
+# Order: incident CI -> host list in an AAP correlation ID (aap_ops:<template>:<limit>)
+#        -> host names mentioned in the short description.
+# Output (on localhost): _sn_incident (raw), _sn_targets (inventory hostnames)
+- name: Look up incident
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: lookup}
+  vars: {sn_lookup_table: incident, sn_lookup_number: "{{ sn_incident_number }}"}
+
+- name: Refuse closed incidents
+  ansible.builtin.assert:
+    that: sn_record.state | string not in ['6', '7', '8']
+    fail_msg: "{{ sn_record.number }} is {{ sn_record_display.state }}; nothing to act on."
+    quiet: true
+
+- name: Resolve candidate names
+  ansible.builtin.set_fact:
+    _sn_incident: "{{ sn_record }}"
+    _sn_candidates: >-
+      {%- set c = [] -%}
+      {%- if sn_record_display.cmdb_ci | default('') -%}{%- set _ = c.append(sn_record_display.cmdb_ci) -%}{%- endif -%}
+      {%- set corr = sn_record.correlation_id | default('') -%}
+      {%- if corr.startswith(sn_correlation_prefix ~ ':') and corr.split(':') | length >= 3 and corr.split(':')[-1] != 'all' -%}
+      {%-   for h in corr.split(':')[-1].split(',') -%}{%- set _ = c.append(h | trim) -%}{%- endfor -%}
+      {%- endif -%}
+      {{ c | select | unique | list }}
+
+- name: Match candidates to inventory
+  ansible.builtin.set_fact:
+    _sn_targets: >-
+      {%- set inv = groups['all'] | default([]) -%}
+      {%- set names = _sn_candidates if _sn_candidates else [] -%}
+      {%- set out = [] -%}
+      {%- for h in inv -%}
+      {%-   for n in names if h | lower == n | lower or h.split('.')[0] | lower == n.split('.')[0] | lower -%}
+      {%-     set _ = out.append(h) -%}
+      {%-   endfor -%}
+      {%-   if not names and (h.split('.')[0] | lower) in (sn_record.short_description | lower) -%}{%- set _ = out.append(h) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out | unique | list }}
+
+- name: Require at least one managed host
+  ansible.builtin.assert:
+    that: _sn_targets | length > 0
+    fail_msg: >-
+      Could not map {{ sn_record.number }} to a host in this inventory
+      (CI '{{ sn_record_display.cmdb_ci | default('') }}', correlation '{{ sn_record.correlation_id | default('') }}').
+      Set the incident's configuration item or launch with a limit and aap_ops_target.
+    quiet: true

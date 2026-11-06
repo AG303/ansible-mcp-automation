@@ -1,0 +1,35 @@
+---
+# PATCH - Hold or release package versions
+# Domain: Patch Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES SYSTEMS. Places or removes a version hold (dnf versionlock or apt-mark hold) on named packages. Linux
+# only. Use the WF workflow (approval required).
+# Survey variables: package_names, hold_action
+
+- name: PATCH - Hold or release package versions
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: PATCH - Hold or release package versions
+    aap_ops_supported_os:
+      - rhel
+      - ubuntu
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run patch_manage/package_hold
+      ansible.builtin.include_role:
+        name: devops.aap_ops.patch_manage
+        tasks_from: package_hold
+
+- name: Report - PATCH - Hold or release package versions
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PATCH - Hold or release package versions
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

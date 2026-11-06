@@ -1,0 +1,49 @@
+---
+- name: Capacity and queue
+  block:
+    - name: Get instance groups
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/instance_groups/"
+
+    - name: Keep instance groups
+      ansible.builtin.set_fact:
+        _igs: "{{ aap_api_results }}"
+
+    - name: Get queued jobs
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/unified_jobs/"
+        aap_api_query: {status__in: "pending,waiting", order_by: created}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _oldest_min: >-
+          {{ ((now().timestamp() - (((aap_api_results | first).created[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 60) | int
+             if aap_api_results | length > 0 else 0 }}
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for g in _igs -%}
+          {%-   set rem = g.percent_capacity_remaining | default(100) | float -%}
+          {%-   set _ = out.append({'host': g.name, 'status': 'fail' if (g.capacity | default(0) | int) == 0 and not g.is_container_group | default(false)
+                                     else ('warn' if rem < 20 else 'ok'),
+                 'summary': (g.jobs_running | default(0)) ~ ' running, capacity ' ~ g.consumed_capacity | default(0) ~ '/' ~ g.capacity | default(0) ~ ' (' ~ rem ~ '% free), '
+                            ~ g.instances | default(0) ~ ' instance(s)' ~ (' [container group]' if g.is_container_group | default(false) else ''),
+                 'details': {'id': g.id, 'jobs_running': g.jobs_running | default(0), 'jobs_total': g.jobs_total | default(0),
+                             'percent_capacity_remaining': rem, 'policy_instance_minimum': g.policy_instance_minimum | default(0)}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if (aap_api_results | length > 20 or _oldest_min | int > 15) else 'ok' }}"
+          summary: >-
+            {{ aap_api_results | length }} job(s) pending/waiting, oldest {{ _oldest_min }} min;
+            {{ _igs | length }} instance group(s)
+          details:
+            queued: "{{ aap_api_results[:50] | map(attribute='name') | list }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Capacity and queue}

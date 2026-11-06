@@ -1,0 +1,32 @@
+---
+# MON - Recent log errors
+# Domain: Server Monitoring. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Collects error/critical entries from journald/syslog or the Windows System/Application event logs
+# for the last N hours. Returns aap_ops_result.
+# Survey variables: hours, max_entries, match_pattern
+
+- name: MON - Recent log errors
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: MON - Recent log errors
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_monitor/log_errors
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_monitor
+        tasks_from: log_errors
+
+- name: Report - MON - Recent log errors
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: MON - Recent log errors
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

@@ -1,0 +1,25 @@
+---
+# SN - Update or resolve incident
+# Domain: ServiceNow Incident. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Writes ServiceNow records only. Adds a work note, changes state, or resolves an incident with a close code and
+# notes. Returns the updated incident.
+# Survey variables: sn_incident_number, sn_incident_state, sn_work_note, sn_close_code, sn_close_notes
+
+- name: SN - Update or resolve incident
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Update or resolve incident
+  tasks:
+    - name: ServiceNow connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: Run sn_incident/update
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_incident
+        tasks_from: update
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

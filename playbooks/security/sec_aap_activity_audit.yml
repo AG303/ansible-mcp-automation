@@ -1,0 +1,25 @@
+---
+# SEC - AAP activity stream audit
+# Domain: Security Compliance. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Create/update/delete events in the controller activity stream over the last N hours grouped by
+# actor and object type, including credential and RBAC changes. Returns aap_ops_result.
+# Survey variables: hours
+
+- name: SEC - AAP activity stream audit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SEC - AAP activity stream audit
+  tasks:
+    - name: AAP API connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+    - name: Run aap_security_audit/activity
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_security_audit
+        tasks_from: activity
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

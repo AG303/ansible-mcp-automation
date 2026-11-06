@@ -1,0 +1,68 @@
+---
+- name: Disk usage
+  block:
+    - name: Linux - filesystem usage
+      when: not aap_ops_is_windows
+      ansible.builtin.set_fact:
+        _du_fs: >-
+          {%- set ds = [] -%}
+          {%- for m in ansible_mounts | default([]) if m.fstype not in host_monitor_fs_exclude and m.size_total | int > 0 -%}
+          {%-   set _ = ds.append({'mount': m.mount, 'fstype': m.fstype, 'size_gb': (m.size_total / 1073741824) | round(1),
+                                   'free_gb': (m.size_available / 1073741824) | round(1),
+                                   'used_pct': (100 - m.size_available / m.size_total * 100) | round(1),
+                                   'inodes_used_pct': ((100 - m.inode_available / m.inode_total * 100) | round(1)) if m.inode_total | default(0) | int > 0 else 0}) -%}
+          {%- endfor -%}
+          {{ ds }}
+
+    - name: Linux - largest directories
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        du -xh --max-depth=2 {{ (scan_path | default('') or '/var') | quote }} 2>/dev/null | sort -rh | head -15
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: _du_top_linux
+
+    - name: Windows - drive usage and largest folders
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $scan = '{{ scan_path | default("", true) }}'
+        if (-not $scan) { $scan = [IO.Path]::GetPathRoot($env:SystemRoot) }
+        $fs = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+          @{ mount = $_.DeviceID; fstype = $_.FileSystem; size_gb = [math]::Round($_.Size/1GB,1); free_gb = [math]::Round($_.FreeSpace/1GB,1)
+             used_pct = if ($_.Size) { [math]::Round(100 - $_.FreeSpace/$_.Size*100,1) } else { 0 }; inodes_used_pct = 0 } }
+        $top = Get-ChildItem -LiteralPath $scan -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+          $sz = (Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+          "{0:N1}G`t{1}" -f ($sz/1GB), $_.FullName } | Sort-Object { [double]($_ -split 'G')[0] } -Descending | Select-Object -First 15
+        @{ fs = @($fs); top = @($top) } | ConvertTo-Json -Depth 4 -Compress
+      changed_when: false
+      check_mode: false
+      register: _du_win
+
+    - name: Normalise
+      ansible.builtin.set_fact:
+        _du: >-
+          {{ {'filesystems': (_du_win.stdout | from_json).fs, 'largest': (_du_win.stdout | from_json).top}
+             if aap_ops_is_windows else
+             {'filesystems': _du_fs, 'largest': _du_top_linux.stdout_lines | default([])} }}
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if (_du.filesystems | selectattr('used_pct', '>=', disk_fail_pct | default(92) | float) | list | length > 0)
+               else ('warn' if (_du.filesystems | selectattr('used_pct', '>=', disk_warn_pct | default(80) | float) | list | length > 0
+                                or _du.filesystems | selectattr('inodes_used_pct', '>=', disk_warn_pct | default(80) | float) | list | length > 0)
+               else 'ok') }}
+          summary: >-
+            {%- set hot = _du.filesystems | selectattr('used_pct', '>=', disk_warn_pct | default(80) | float) | list -%}
+            {{ (hot | length) ~ ' filesystem(s) over ' ~ disk_warn_pct | default(80) ~ '%: ' ~ (hot | map(attribute='mount') | join(', '))
+               if hot else 'All filesystems below ' ~ disk_warn_pct | default(80) ~ '%' }}
+          details: "{{ _du }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Disk usage}

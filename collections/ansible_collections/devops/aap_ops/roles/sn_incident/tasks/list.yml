@@ -1,0 +1,40 @@
+---
+- name: Open incidents report
+  block:
+    - name: Query open incidents
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: incident
+        sn_q_query: >-
+          active=true^priority<={{ sn_max_priority | default(3) | int }}
+          {{- ('^assignment_group.name=' ~ sn_assignment_group | trim) if sn_assignment_group | default('') | trim else '' }}
+          {{- ('^correlation_idSTARTSWITH' ~ sn_correlation_prefix ~ ':') if sn_aap_only | default('no') | bool else '' }}^ORDERBYpriority^ORDERBYopened_at
+        sn_q_display: "true"
+        sn_q_limit: "{{ sn_incident_list_limit }}"
+        sn_q_fields: [number, short_description, priority, state, opened_at, assignment_group, assigned_to, cmdb_ci, correlation_id]
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for i in sn_q_records -%}
+          {%-   set p = i.priority | string -%}
+          {%-   set _ = out.append({'host': i.number, 'status': 'warn' if p[:1] in ['1', '2'] else 'ok',
+                   'summary': p ~ ' | ' ~ i.state ~ ' | ' ~ (i.cmdb_ci or 'no CI') ~ ' | ' ~ i.short_description | truncate(100) ~ ' | opened ' ~ i.opened_at,
+                   'details': {'assignment_group': i.assignment_group, 'assigned_to': i.assigned_to, 'cmdb_ci': i.cmdb_ci,
+                               'aap_created': (i.correlation_id | default('')).startswith(sn_correlation_prefix ~ ':')}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: ok
+          summary: >-
+            {{ sn_q_total }} open incident(s) (showing {{ sn_q_records | length }}) priority 1-{{ sn_max_priority | default(3) }}
+            {{- (' for ' ~ sn_assignment_group) if sn_assignment_group | default('') | trim else '' }}{{ ' (AAP-created only)' if sn_aap_only | default('no') | bool else '' }}
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Incident list}

@@ -1,0 +1,111 @@
+---
+# Enable the host firewall with an allow-list. Input: _hh_ports (list of TCP ports).
+# The connection port (SSH / WinRM) is always allowed to prevent lockout.
+- name: Compute allow-list
+  ansible.builtin.set_fact:
+    _hh_allow: >-
+      {{ ((_hh_ports | default([])) + (host_hardening_firewall_always_allow_windows if aap_ops_is_windows else host_hardening_firewall_always_allow_linux))
+         | map('string') | map('trim') | select | unique | list }}
+
+- name: RHEL - firewalld installed and running
+  when: aap_ops_os == 'rhel'
+  # Check mode: firewalld is not really installed, so later tasks cannot query it.
+  ignore_errors: "{{ ansible_check_mode and (_hh_pkg_fwd | default({}) is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+  block:
+    - name: Install firewalld
+      ansible.builtin.dnf:
+        name: firewalld
+        state: present
+      register: _hh_pkg_fwd
+    - name: Start firewalld
+      ansible.builtin.service:
+        name: firewalld
+        state: started
+        enabled: true
+    - name: Allow ports
+      ansible.posix.firewalld:
+        port: "{{ item }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ _hh_allow }}"
+      register: _hh_fw_rhel
+    - name: List current ports and services
+      ansible.builtin.command: firewall-cmd --list-all
+      register: _hh_fw_list
+      changed_when: false
+      check_mode: false
+    - name: Prune ports not in allow-list
+      when: host_hardening_firewall_prune | bool
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: disabled
+      loop: >-
+        {{ (_hh_fw_list.stdout | regex_findall('\n\s*ports: (.*)') | first | default('')).split()
+           | reject('in', _hh_allow | map('regex_replace', '$', '/tcp') | list) | list }}
+    - name: Prune services other than ssh
+      when: host_hardening_firewall_prune | bool
+      ansible.posix.firewalld:
+        service: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: disabled
+      loop: "{{ (_hh_fw_list.stdout | regex_findall('services: (.*)') | first | default('')).split() | reject('in', ['ssh']) | list }}"
+
+- name: Ubuntu - ufw allow-list
+  when: aap_ops_os == 'ubuntu'
+  block:
+    - name: Install ufw
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+      register: _hh_pkg_ufw
+    - name: Allow ports
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: "{{ _hh_allow }}"
+      register: _hh_fw_ufw
+      ignore_errors: "{{ ansible_check_mode and (_hh_pkg_ufw is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+    - name: Default deny incoming
+      community.general.ufw:
+        direction: incoming
+        default: deny
+      ignore_errors: "{{ ansible_check_mode and (_hh_pkg_ufw is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+    - name: Enable ufw
+      community.general.ufw:
+        state: enabled
+      register: _hh_fw_ufw_on
+      ignore_errors: "{{ ansible_check_mode and (_hh_pkg_ufw is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+
+- name: Windows - firewall profiles and allow rules
+  when: aap_ops_is_windows
+  block:
+    - name: Enable all profiles, block inbound by default
+      ansible.windows.win_firewall:
+        state: enabled
+        profiles: [Domain, Private, Public]
+        inbound_action: block
+        outbound_action: allow
+      register: _hh_fw_win
+    - name: Allow listed ports
+      ansible.windows.win_firewall_rule:
+        name: "AAP Ops allow TCP {{ item }}"
+        localport: "{{ item }}"
+        protocol: tcp
+        direction: in
+        action: allow
+        profiles: [domain, private, public]
+        state: present
+        enabled: true
+      loop: "{{ _hh_allow }}"
+      register: _hh_fw_win_rules
+
+- name: Firewall change summary
+  ansible.builtin.set_fact:
+    _hh_fw_changed: >-
+      {{ (_hh_fw_rhel.changed | default(false)) or (_hh_fw_ufw.changed | default(false)) or (_hh_fw_ufw_on.changed | default(false))
+         or (_hh_fw_win.changed | default(false)) or (_hh_fw_win_rules.changed | default(false)) }}

@@ -1,0 +1,22 @@
+---
+# Poll a unified job until it finishes. Inputs: aap_api_job_path (e.g.
+# /api/controller/v2/jobs/42/), aap_api_wait_retries (default 360), aap_api_wait_delay (10s).
+# Output: aap_api_job (final job JSON).
+- name: "Wait for {{ aap_api_job_path }}"
+  ansible.builtin.uri:
+    url: "{{ aap_api_job_path if aap_api_job_path.startswith('http') else _aap_api_base ~ aap_api_job_path }}"
+    method: GET
+    headers: "{{ _aap_api_headers }}"
+    url_username: "{{ aap_api_username if _aap_api_basic else omit }}"
+    url_password: "{{ aap_api_password if _aap_api_basic else omit }}"
+    force_basic_auth: "{{ _aap_api_basic }}"
+    validate_certs: "{{ aap_api_validate_certs }}"
+    timeout: "{{ aap_api_timeout }}"
+  register: _aap_wait
+  until: _aap_wait.json.status | default('') in ['successful', 'failed', 'error', 'canceled']
+  retries: "{{ aap_api_wait_retries | default(360) | int }}"
+  delay: "{{ aap_api_wait_delay | default(10) | int }}"
+
+- name: Record finished job
+  ansible.builtin.set_fact:
+    aap_api_job: "{{ _aap_wait.json }}"

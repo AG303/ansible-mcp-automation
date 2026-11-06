@@ -1,0 +1,38 @@
+---
+# localhost: work note with outcome; resolve the incident when every host is healthy.
+- name: Summarise outcome
+  ansible.builtin.set_fact:
+    _rem_hosts: "{{ hostvars['localhost']._aap_ops_targets | default(hostvars['localhost']._sn_targets) }}"
+    _rem_ok: >-
+      {{ (hostvars['localhost']._aap_ops_targets | default(hostvars['localhost']._sn_targets))
+         | map('extract', hostvars, ['aap_ops_host_result', 'healthy']) | map('default', false) | map('bool') | list }}
+
+- name: Compose note
+  ansible.builtin.set_fact:
+    _rem_note: |-
+      AAP remediation "{{ remediation_action }}"{{ (' (' ~ service_name ~ ')') if service_name | default('') else '' }} by job {{ tower_job_id | default('local') }}:
+      {% for h in _rem_hosts %}
+      - {{ h }}: {{ hostvars[h].aap_ops_host_result.summary | default('no result (unreachable or failed)') }}
+      {% endfor %}
+
+- name: Add work note
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: work_note}
+  vars:
+    sn_note_table: incident
+    sn_note_number: "{{ sn_incident_number }}"
+    sn_note_text: "{{ _rem_note }}"
+
+- name: Resolve incident
+  when:
+    - resolve_on_success | default('yes') | bool
+    - _rem_ok | length > 0
+    - _rem_ok is all
+  servicenow.itsm.api:
+    resource: incident
+    action: patch
+    sys_id: "{{ hostvars['localhost']._sn_incident.sys_id }}"
+    data:
+      state: "{{ sn_incident_state_map.resolved }}"
+      close_code: Solved Remotely (Permanently)
+      close_notes: "{{ _rem_note | truncate(4000) }}"
+  register: _resolved

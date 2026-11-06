@@ -1,0 +1,53 @@
+---
+- name: RBAC audit
+  block:
+    - name: Get platform users (gateway)
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_g }}/users/"
+        aap_api_query: {order_by: username}
+
+    - name: Keep users
+      ansible.builtin.set_fact:
+        _users: "{{ aap_api_results }}"
+
+    - name: Get organization admin assignments (gateway)
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_g }}/role_user_assignments/"
+        aap_api_query: {role_definition__name: Organization Admin}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + (_rows | rejectattr('status', 'equalto', 'ok') | list) }}"
+      vars:
+        _org_admins: "{{ aap_api_results | map(attribute='summary_fields.user.username', default='') | select | list }}"
+        _supers: "{{ _users | selectattr('is_superuser') | map(attribute='username') | list }}"
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for u in _users -%}
+          {%-   set days = (((now().timestamp() - ((u.last_login[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 86400) | int) if u.last_login else -1 -%}
+          {%-   set issues = [] -%}
+          {%-   if days < 0 -%}{%- set _ = issues.append('never logged in') -%}
+          {%-   elif days > (stale_days | default(90) | int) -%}{%- set _ = issues.append('no login for ' ~ days ~ ' days') -%}{%- endif -%}
+          {%-   if u.is_superuser -%}{%- set _ = issues.append('superuser') -%}{%- endif -%}
+          {%-   if not u.email | default('') -%}{%- set _ = issues.append('no email') -%}{%- endif -%}
+          {%-   set sev = 'fail' if (u.is_superuser and (days < 0 or days > (stale_days | default(90) | int))) else ('warn' if issues else 'ok') -%}
+          {%-   set _ = out.append({'host': u.username, 'status': sev,
+                 'summary': (('last login ' ~ days ~ ' days ago') if days >= 0 else 'never logged in') ~ ((' - ' ~ issues | join('; ')) if issues else '')
+                            ~ (' - organization admin' if u.username in _org_admins else ''),
+                 'details': {'id': u.id, 'is_superuser': u.is_superuser, 'org_admin': u.username in _org_admins,
+                             'last_login_days': days, 'issues': issues}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if (_supers | length > aap_security_audit_max_superusers | int or _rows | rejectattr('status', 'equalto', 'ok') | list | length > 0) else 'ok' }}"
+          summary: >-
+            {{ _users | length }} users, {{ _supers | length }} superuser(s) (max {{ aap_security_audit_max_superusers }}),
+            {{ _org_admins | unique | length }} organization admin(s), {{ _rows | rejectattr('status', 'equalto', 'ok') | list | length }} with findings
+          details: {superusers: "{{ _supers }}", org_admins: "{{ _org_admins | unique }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: RBAC audit}

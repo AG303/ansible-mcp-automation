@@ -1,0 +1,47 @@
+---
+# CHANGING. Playbook runs this with serial: "<serial_pct>%".
+- name: Controlled reboot
+  block:
+    - name: Determine whether a reboot is needed
+      ansible.builtin.include_tasks: reboot_required.yml
+
+    - name: Skip hosts that do not need a reboot
+      when: (only_if_required | default('yes') | bool) and not _rr.required
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: ok
+          summary: No reboot required; skipped
+          details: "{{ _rr }}"
+
+    - name: Reboot and verify
+      when: not (only_if_required | default('yes') | bool) or _rr.required
+      block:
+        - name: Linux - reboot
+          when: not aap_ops_is_windows
+          ansible.builtin.reboot:
+            reboot_timeout: "{{ patch_manage_reboot_timeout }}"
+            msg: "Controlled reboot by Ansible Automation Platform"
+          register: _rb
+
+        - name: Windows - reboot
+          when: aap_ops_is_windows
+          ansible.windows.win_reboot:
+            reboot_timeout: "{{ patch_manage_reboot_timeout }}"
+          register: _rb_win
+
+        - name: Verify critical services
+          ansible.builtin.include_tasks: _services.yml
+          vars:
+            _svc_list: "{{ (critical_services | default('')).split(',') | map('trim') | select | list }}"
+
+        - name: Record result
+          ansible.builtin.set_fact:
+            aap_ops_host_result:
+              status: "{{ 'fail' if _svc_down | length > 0 else 'changed' }}"
+              summary: >-
+                Rebooted in {{ (_rb_win.elapsed if aap_ops_is_windows else _rb.elapsed) | default('?') }}s{{ ('; services not running: ' ~ _svc_down | join(',')) if _svc_down else '; host healthy' }}
+              details: {reasons: "{{ _rr.reasons }}", critical_services_down: "{{ _svc_down }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Controlled reboot}

@@ -1,0 +1,32 @@
+---
+# PATCH - Install, update or remove a package
+# Domain: Patch Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES SYSTEMS. Installs, updates to latest or removes named packages (dnf, apt, or Chocolatey/winget on
+# Windows). Use the WF workflow (approval required).
+# Survey variables: package_names, package_state
+
+- name: PATCH - Install, update or remove a package
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: PATCH - Install, update or remove a package
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run patch_manage/package
+      ansible.builtin.include_role:
+        name: devops.aap_ops.patch_manage
+        tasks_from: package
+
+- name: Report - PATCH - Install, update or remove a package
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PATCH - Install, update or remove a package
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

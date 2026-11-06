@@ -1,0 +1,64 @@
+---
+# CHANGING. Install, update to latest or remove named packages.
+- name: Package management
+  block:
+    - name: Require package names
+      ansible.builtin.assert:
+        that: _pkgs | length > 0
+        fail_msg: package_names is required.
+        quiet: true
+
+    - name: RHEL - dnf
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.dnf:
+        name: "{{ _pkgs }}"
+        state: "{{ package_state | default('present') }}"
+      register: _pk
+
+    - name: Ubuntu - apt
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.apt:
+        name: "{{ _pkgs }}"
+        state: "{{ package_state | default('present') }}"
+        update_cache: true
+        cache_valid_time: "{{ patch_manage_apt_cache_valid_time }}"
+      register: _pk_apt
+
+    - name: Windows - winget or Chocolatey
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $state = '{{ package_state | default('present') }}'
+        $out = @()
+        foreach ($p in @('{{ _pkgs | join("','") }}')) {
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            switch ($state) {
+              'absent'  { $r = winget uninstall --id $p --exact --silent --accept-source-agreements 2>&1 }
+              'latest'  { $r = winget upgrade --id $p --exact --silent --accept-source-agreements --accept-package-agreements 2>&1
+                          if ($LASTEXITCODE -ne 0) { $r = winget install --id $p --exact --silent --accept-source-agreements --accept-package-agreements 2>&1 } }
+              default   { $r = winget install --id $p --exact --silent --accept-source-agreements --accept-package-agreements 2>&1 }
+            }
+          } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+            switch ($state) { 'absent' { $r = choco uninstall $p -y 2>&1 } 'latest' { $r = choco upgrade $p -y 2>&1 } default { $r = choco install $p -y 2>&1 } }
+          } else { throw 'Neither winget nor Chocolatey is available on this host' }
+          $out += @{ package = $p; rc = $LASTEXITCODE; output = (($r | Out-String).Trim() -split "`n" | Select-Object -Last 3) -join ' ' }
+        }
+        ConvertTo-Json -InputObject @($out) -Compress
+      register: _pk_win
+      changed_when: "'No applicable' not in _pk_win.stdout and 'already installed' not in _pk_win.stdout"
+      failed_when: (_pk_win.stdout | default('[]') | from_json | rejectattr('rc', 'in', [0, -1978335189, -1978335212]) | list | length) > 0
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if (_pk.changed | default(false) or _pk_apt.changed | default(false) or _pk_win.changed | default(false)) else 'ok' }}"
+          summary: "{{ _pkgs | join(', ') }} -> {{ package_state | default('present') }}"
+          details:
+            packages: "{{ _pkgs }}"
+            state: "{{ package_state | default('present') }}"
+            results: "{{ (_pk.results | default([])) if aap_ops_os == 'rhel' else ((_pk_win.stdout | from_json) if aap_ops_is_windows else (_pk_apt.stdout_lines | default([]) | select('search', '^(Setting up|Removing) ') | list)) }}"
+  vars:
+    _pkgs: "{{ (package_names | default('')).split(',') | map('trim') | select | list }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Package management}

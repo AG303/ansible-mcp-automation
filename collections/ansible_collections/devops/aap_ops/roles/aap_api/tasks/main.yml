@@ -1,0 +1,25 @@
+---
+- name: Validate AAP API connection settings
+  ansible.builtin.assert:
+    that:
+      - aap_api_host | trim | length > 0
+      - (aap_api_token | trim | length > 0) or (aap_api_username | trim | length > 0)
+    fail_msg: >-
+      AAP API host/token not found. Attach the "AAP Ops - Controller API" credential
+      (Red Hat Ansible Automation Platform type) to this job template.
+    quiet: true
+
+- name: Build AAP API connection facts
+  no_log: true
+  ansible.builtin.set_fact:
+    _aap_api_base: "{{ (aap_api_host | trim) if (aap_api_host | trim).startswith('http') else 'https://' ~ (aap_api_host | trim) }}"
+    _aap_api_headers: >-
+      {{ {'Authorization': 'Bearer ' ~ (aap_api_token | trim), 'Content-Type': 'application/json'}
+         if (aap_api_token | trim | length > 0) else {'Content-Type': 'application/json'} }}
+    _aap_api_basic: "{{ (aap_api_token | trim | length) == 0 }}"
+
+- name: Normalise base URL
+  ansible.builtin.set_fact:
+    _aap_api_base: "{{ _aap_api_base | regex_replace('/+$', '') }}"
+    aap_api_c: "{{ _aap_api_base | regex_replace('/+$', '') }}{{ aap_api_controller_path }}"
+    aap_api_g: "{{ _aap_api_base | regex_replace('/+$', '') }}{{ aap_api_gateway_path }}"

@@ -1,0 +1,71 @@
+---
+- name: Problem candidates from incident trend
+  block:
+    - name: Incidents in the look-back window
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: incident
+        sn_q_query: "opened_at>={{ '%Y-%m-%d %H:%M:%S' | strftime(now().timestamp() - (days | default(30) | int) * 86400, utc=true) }}^ORDERBYDESCopened_at"
+        sn_q_fields: [number, short_description, cmdb_ci, correlation_id, problem_id, priority, opened_at]
+        sn_q_display: "all"
+        sn_q_limit: "{{ sn_problem_trend_max_incidents }}"
+
+    - name: Group incidents
+      ansible.builtin.set_fact:
+        _groups: >-
+          {%- set g = {} -%}
+          {%- for i in sn_q_records -%}
+          {%-   set ci = i.cmdb_ci.display_value | default('') -%}
+          {%-   set corr = i.correlation_id.value | default('') -%}
+          {%-   set keys = [] -%}
+          {%-   if corr -%}{%- set _ = keys.append('correlation: ' ~ corr) -%}{%- endif -%}
+          {%-   if ci -%}{%- set _ = keys.append('ci: ' ~ ci) -%}{%- endif -%}
+          {%-   for k in keys -%}
+          {%-     set cur = g.get(k, {'key': k, 'incidents': [], 'unlinked': [], 'samples': []}) -%}
+          {%-     set _ = cur.incidents.append(i.number.value) -%}
+          {%-     if not i.problem_id.value | default('') -%}{%- set _ = cur.unlinked.append(i.number.value) -%}{%- endif -%}
+          {%-     if cur.samples | length < 3 -%}{%- set _ = cur.samples.append(i.short_description.value | truncate(80)) -%}{%- endif -%}
+          {%-     set _ = g.update({k: cur}) -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ g.values() | list | sort(attribute='key') }}
+
+    - name: Select candidates
+      ansible.builtin.set_fact:
+        _cands: >-
+          {%- set out = [] -%}
+          {%- for g in _groups if g.unlinked | length >= (min_incidents | default(3) | int) -%}{%- set _ = out.append(g) -%}{%- endfor -%}
+          {{ out | sort(attribute='unlinked', reverse=true) }}
+
+    - name: Create problems for candidates
+      when: create_problems | default('no') | bool
+      ansible.builtin.include_tasks: _trend_create_one.yml
+      loop: "{{ _cands[:sn_problem_trend_max_create | int] }}"
+      loop_control: {loop_var: _cand, label: "{{ _cand.key }}"}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _made: "{{ _trend_created | default({}) }}"
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for c in _cands -%}
+          {%-   set _ = out.append({'host': c.key, 'status': 'changed' if c.key in _made else 'warn',
+                   'summary': (c.unlinked | length) ~ ' unlinked of ' ~ (c.incidents | length) ~ ' incident(s)'
+                              ~ ((' -> problem ' ~ _made[c.key]) if c.key in _made else ' - problem candidate') ~ ' | e.g. ' ~ c.samples | join(' / '),
+                   'details': {'incidents': c.incidents[:50], 'unlinked': c.unlinked[:50]}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'changed' if _made else ('warn' if _cands else 'ok') }}"
+          summary: >-
+            {{ sn_q_records | length }} incident(s) in {{ days | default(30) }} day(s); {{ _cands | length }} group(s) with
+            >= {{ min_incidents | default(3) }} unlinked incidents; {{ _made | length }} problem(s) created
+            {%- if not create_problems | default('no') | bool %} (report only; set create_problems=yes to open them){% endif %}
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Problem trend}

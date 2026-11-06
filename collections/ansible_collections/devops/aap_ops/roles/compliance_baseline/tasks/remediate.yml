@@ -1,0 +1,63 @@
+---
+# CHANGING. Scan, remediate failing automatable controls (optionally limited to
+# control_ids), re-scan and report before/after.
+- name: Compliance remediation
+  block:
+    - name: Select controls
+      ansible.builtin.include_tasks: _select.yml
+
+    - name: Initial scan
+      ansible.builtin.include_tasks: _run_scan.yml
+
+    - name: Choose controls to remediate
+      ansible.builtin.set_fact:
+        _before: "{{ _scan }}"
+        _todo: >-
+          {{ _controls
+             | selectattr('id', 'in', _scan | rejectattr('pass') | selectattr('automatable') | map(attribute='id') | list)
+             | rejectattr('id', 'in', compliance_baseline_skip_remediation)
+             | selectattr('id', 'in', _ids if _ids | length > 0 else _controls | map(attribute='id') | list)
+             | list }}
+      vars:
+        _ids: "{{ (control_ids | default('')).split(',') | map('trim') | map('upper') | select | list }}"
+
+    - name: Apply remediations
+      ansible.builtin.include_tasks: "fix_{{ 'windows' if aap_ops_is_windows else 'linux' }}.yml"
+      loop: "{{ _todo }}"
+      loop_control:
+        loop_var: _ctl
+        label: "{{ _ctl.id }} {{ _ctl.title }}"
+
+    - name: Flush handlers (sshd reload, sysctl, auditd)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Restart services whose configuration changed
+      when: not aap_ops_is_windows and _todo | selectattr('fix.notify_service', 'defined') | list | length > 0
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: restarted
+      loop: "{{ _todo | selectattr('fix.notify_service', 'defined') | map(attribute='fix.notify_service') | unique | list }}"
+
+    - name: Re-scan
+      ansible.builtin.include_tasks: _run_scan.yml
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if _todo | length > 0 else 'ok' }}"
+          summary: >-
+            {{ _profile | upper }} {{ _score_before }}% -> {{ _score_after }}%; remediated {{ _todo | length }} control(s);
+            {{ _scan | rejectattr('pass') | list | length }} still failing{{ (' (' ~ (_scan | rejectattr('pass') | map(attribute='id') | join(', ') | truncate(150)) ~ ')') if _scan | rejectattr('pass') | list else '' }}
+          details:
+            profile: "{{ _profile }}"
+            score_before: "{{ _score_before }}"
+            score_after: "{{ _score_after }}"
+            remediated: "{{ _todo | map(attribute='id') | list }}"
+            still_failing: "{{ _scan | rejectattr('pass') | list }}"
+      vars:
+        _score_before: "{{ ((_before | selectattr('pass') | list | length) / ([_before | length, 1] | max) * 100) | round(1) }}"
+        _score_after: "{{ ((_scan | selectattr('pass') | list | length) / ([_scan | length, 1] | max) * 100) | round(1) }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Compliance remediation}

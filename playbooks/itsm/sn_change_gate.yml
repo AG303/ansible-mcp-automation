@@ -1,0 +1,31 @@
+---
+# SN - Change gate
+# Domain: ServiceNow Incident. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only gate. Fails unless sn_change_number exists, is approved, is in scheduled or implement state and now
+# is inside its planned window (optionally that the launch limit hosts are covered by the change CIs). First
+# node of every WF workflow. Returns aap_ops_result.
+# Survey variables: sn_change_number
+
+- name: SN - Change gate
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SN - Change gate
+  tasks:
+    - name: ServiceNow connection
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_api
+        public: true
+    - name: AAP API connection (job evidence / workflow context)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_api
+        public: true
+      when: tower_workflow_job_id is defined or awx_workflow_job_id is defined
+    - name: Run sn_change/gate
+      ansible.builtin.include_role:
+        name: devops.aap_ops.sn_change
+        tasks_from: gate
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

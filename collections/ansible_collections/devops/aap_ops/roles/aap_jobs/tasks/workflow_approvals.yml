@@ -1,0 +1,34 @@
+---
+- name: Pending workflow approvals
+  block:
+    - name: Get pending approvals
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/workflow_approvals/"
+        aap_api_query: {status: pending, order_by: created}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for a in aap_api_results -%}
+          {%-   set age = ((now().timestamp() - ((a.created[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 3600) | round(1) -%}
+          {%-   set wf = a.summary_fields.source_workflow_job | default({}) -%}
+          {%-   set _ = out.append({'host': a.name ~ ' #' ~ a.id, 'status': 'warn' if age > 24 else 'ok',
+                 'summary': 'waiting ' ~ age ~ 'h in workflow ' ~ wf.name | default('?') ~ ' #' ~ wf.id | default('?')
+                            ~ ((', expires ' ~ a.approval_expiration) if a.approval_expiration | default('') else ''),
+                 'details': {'approval_id': a.id, 'workflow_job_id': wf.id | default(''), 'age_hours': age,
+                             'description': a.description | default(''), 'approve_url': a.url ~ 'approve/'}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _rows | selectattr('status', 'equalto', 'warn') | list | length > 0 else 'ok' }}"
+          summary: "{{ aap_api_results | length }} pending approval(s); approvals are performed by the AAP Ops Approvers team, never by agents"
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Workflow approvals}

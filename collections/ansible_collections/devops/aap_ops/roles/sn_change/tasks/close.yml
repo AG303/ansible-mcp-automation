@@ -1,0 +1,72 @@
+---
+# Runs on the success and failure paths of "WF - <name>" workflows.
+- name: Change close
+  block:
+    - name: Validate close code
+      ansible.builtin.assert:
+        that: sn_close_code | default('successful') in sn_change_close_codes
+        fail_msg: "sn_close_code must be one of {{ sn_change_close_codes }}."
+        quiet: true
+
+    - name: Load change
+      ansible.builtin.include_tasks: _load_change.yml
+
+    - name: Collect workflow evidence
+      when: tower_workflow_job_id | default(awx_workflow_job_id | default('')) | string | length > 0
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: job_evidence}
+      vars:
+        aap_evidence_job_id: "{{ tower_workflow_job_id | default(awx_workflow_job_id) }}"
+
+    - name: Decide close code and notes
+      ansible.builtin.set_fact:
+        _close_code: "{{ sn_close_code | default('successful') }}"
+        _close_notes: |-
+          {{ sn_close_notes | default('') }}
+          {% if aap_evidence is defined %}
+          AAP workflow job {{ aap_evidence.id }} "{{ aap_evidence.name }}" ({{ aap_evidence.url }})
+          Limit: {{ aap_evidence.limit or 'template default' }}
+          {% for n in aap_evidence.nodes %}
+          - {{ n.name }} (job {{ n.id }}): {{ n.status }}
+          {% endfor %}
+          {% for j in aap_evidence.failed_jobs %}
+          Failed: {{ j.name }} (job {{ j.id }}) hosts {{ j.failed_hosts | join(', ') or 'n/a' }}
+          {%   for t in j.failed_tasks[:5] %}
+            {{ t.host }} | {{ t.task }} | {{ t.msg }}
+          {%   endfor %}
+          {% endfor %}
+          {% endif %}
+          Closed by AAP job {{ tower_job_id | default('local') }} at {{ now(utc=true).strftime('%Y-%m-%d %H:%M:%S') }} UTC.
+
+    - name: Get node results (aap_ops_result overall) for successful runs
+      when:
+        - aap_evidence is defined
+        - sn_close_code | default('successful') == 'successful'
+      ansible.builtin.include_tasks: _node_results.yml
+
+    - name: Move change to Review with close code
+      servicenow.itsm.api:
+        resource: change_request
+        action: patch
+        sys_id: "{{ _chg.sys_id }}"
+        data:
+          state: "{{ sn_change_state_map.review }}"
+          close_code: "{{ _final_code }}"
+          close_notes: "{{ _close_notes | trim | truncate(4000) }}"
+          work_end: "{{ now(utc=true).strftime('%Y-%m-%d %H:%M:%S') }}"
+          work_notes: "AAP closed implementation with code {{ _final_code }}."
+      vars:
+        _final_code: "{{ 'successful_issues' if (_close_code == 'successful' and _node_warn | default(false) | bool) else _close_code }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ _chg.number }}"
+            status: "{{ 'warn' if _final_code != 'successful' else 'changed' }}"
+            summary: "{{ _chg.number }} moved to Review, close code {{ _final_code }}"
+            details: {close_code: "{{ _final_code }}", workflow_job: "{{ aap_evidence.id | default('') }}"}
+      vars:
+        _final_code: "{{ 'successful_issues' if (_close_code == 'successful' and _node_warn | default(false) | bool) else _close_code }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Change close}

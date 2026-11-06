@@ -1,0 +1,42 @@
+---
+- name: ServiceNow connection test
+  block:
+    - name: Read instance build (sys_properties may be ACL-protected)
+      block:
+        - name: Query glide.buildtag
+          ansible.builtin.include_tasks: query.yml
+          vars: {sn_q_table: sys_properties, sn_q_query: name=glide.buildtag, sn_q_fields: [name, value], sn_q_limit: 1}
+        - name: Keep build
+          ansible.builtin.set_fact:
+            _sn_build: "{{ sn_q_records }}"
+      rescue:
+        - name: Build not readable
+          ansible.builtin.set_fact:
+            _sn_build: []
+
+    - name: Probe read access per table
+      ansible.builtin.include_tasks: _probe_table.yml
+      loop: [incident, change_request, problem, problem_task, cmdb_ci_server, cmn_schedule]
+      loop_control: {loop_var: _probe_table}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for r in _sn_probes | default([]) -%}
+          {%-   set _ = out.append({'host': r.table, 'status': 'ok' if r.ok else ('warn' if r.table == 'cmn_schedule' else 'fail'),
+                   'summary': ('read OK, ' ~ r.total ~ ' record(s)') if r.ok else ('no read access: ' ~ r.msg | truncate(200)), 'details': {}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: "{{ sn_host | regex_replace('^https?://', '') }}"
+          status: ok
+          summary: >-
+            connected as {{ sn_username }}; build {{ (_sn_build | first | default({})).value | default('unknown (sys_properties not readable)') }}
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: ServiceNow connection}

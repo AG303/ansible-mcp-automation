@@ -1,0 +1,21 @@
+---
+# PLAT - Platform backup
+# Domain: Platform Configuration. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES PLATFORM. Creates an AnsibleAutomationPlatformBackup custom resource and waits for it to complete. Use
+# the WF workflow (approval required).
+# Survey variables: aap_namespace, aap_cr_name, backup_pvc_size
+
+- name: PLAT - Platform backup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PLAT - Platform backup
+  tasks:
+    - name: Run aap_operator/backup
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_operator
+        tasks_from: backup
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

@@ -1,0 +1,31 @@
+---
+# SEC - SELinux, AppArmor and Defender status
+# Domain: Security Compliance. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. SELinux mode, AppArmor profile status or Microsoft Defender real-time protection and signature age.
+# Returns aap_ops_result.
+
+- name: SEC - SELinux, AppArmor and Defender status
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: SEC - SELinux, AppArmor and Defender status
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_security_audit/mac_status
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_security_audit
+        tasks_from: mac_status
+
+- name: Report - SEC - SELinux, AppArmor and Defender status
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SEC - SELinux, AppArmor and Defender status
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

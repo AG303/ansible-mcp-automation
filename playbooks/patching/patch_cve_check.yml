@@ -1,0 +1,32 @@
+---
+# PATCH - Package or CVE exposure check
+# Domain: Patch Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Checks installed versions of named packages (or Windows KBs) against a minimum fixed version and
+# reports exposed hosts. Returns aap_ops_result.
+# Survey variables: package_name, fixed_version
+
+- name: PATCH - Package or CVE exposure check
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: PATCH - Package or CVE exposure check
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run patch_manage/cve_check
+      ansible.builtin.include_role:
+        name: devops.aap_ops.patch_manage
+        tasks_from: cve_check
+
+- name: Report - PATCH - Package or CVE exposure check
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PATCH - Package or CVE exposure check
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

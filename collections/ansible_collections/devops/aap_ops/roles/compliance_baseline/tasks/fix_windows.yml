@@ -1,0 +1,34 @@
+---
+- name: "{{ _ctl.id }} - registry"
+  when: _ctl.fix.type == 'regedit'
+  ansible.windows.win_regedit:
+    path: "{{ _ctl.fix.path }}"
+    name: "{{ _ctl.fix.name }}"
+    data: "{{ _ctl.fix.data }}"
+    type: "{{ _ctl.fix.regtype }}"
+
+- name: "{{ _ctl.id }} - local security policy"
+  when: _ctl.fix.type == 'secpol'
+  community.windows.win_security_policy:
+    section: "{{ _ctl.fix.section }}"
+    key: "{{ _ctl.fix.key }}"
+    value: "{{ _ctl.fix.value }}"
+
+- name: "{{ _ctl.id }} - audit policy"
+  when: _ctl.fix.type == 'auditpol'
+  ansible.windows.win_audit_policy_system:
+    subcategory: "{{ _ctl.fix.subcategory }}"
+    audit_type: "{{ _ctl.fix.audit_type }}"
+
+- name: "{{ _ctl.id }} - firewall profiles"
+  when: _ctl.fix.type == 'firewall'
+  ansible.windows.win_firewall:
+    state: enabled
+    profiles: [Domain, Private, Public]
+
+- name: "{{ _ctl.id }} - Defender real-time protection"
+  when: _ctl.fix.type == 'defender'
+  ansible.windows.win_shell: |
+    Set-MpPreference -DisableRealtimeMonitoring $false
+    Update-MpSignature -ErrorAction SilentlyContinue
+  changed_when: true

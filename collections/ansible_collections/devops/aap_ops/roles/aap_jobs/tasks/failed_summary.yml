@@ -1,0 +1,39 @@
+---
+- name: Failed job summary
+  block:
+    - name: Get failed/errored jobs in window
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/unified_jobs/"
+        aap_api_query: >-
+          {{ {'status__in': 'failed,error', 'finished__gt': '%Y-%m-%dT%H:%M:%SZ' | strftime(now().timestamp() - (hours | default(24) | int) * 3600, utc=true),
+              'order_by': '-finished', 'not__type': 'system_job'}
+             | combine({'name__icontains': template_filter} if template_filter | default('') | length > 0 else {}) }}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _jobs: "{{ aap_api_results }}"
+        _by_name: "{{ _jobs | groupby('name') | map('list') | list }}"
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for g in _by_name -%}
+          {%-   set last = g[1] | sort(attribute='id', reverse=true) | first -%}
+          {%-   set _ = out.append({'host': g[0], 'status': 'fail',
+                 'summary': (g[1] | length) ~ ' failure(s); last job ' ~ last.id ~ ' (' ~ last.type ~ ') at ' ~ last.finished ~ ': ' ~ (last.job_explanation | default('') or 'see job output') | truncate(200),
+                 'details': {'count': g[1] | length, 'job_ids': g[1] | map(attribute='id') | list, 'last_job_id': last.id, 'type': last.type,
+                             'launched_by': last.summary_fields.launched_by.name | default(''), 'launch_type': last.launch_type | default('')}}) -%}
+          {%- endfor -%}
+          {{ out | sort(attribute='details.count', reverse=true) }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _jobs | length > 0 else 'ok' }}"
+          summary: >-
+            {{ _jobs | length }} failed/errored job(s) across {{ _by_name | length }} template(s) in the last {{ hours | default(24) }}h
+            {{- (' matching \"' ~ template_filter ~ '\"') if template_filter | default('') | length > 0 else '' }}
+          details: {window_hours: "{{ hours | default(24) | int }}", total: "{{ _jobs | length }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Failed job summary}

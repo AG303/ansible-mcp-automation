@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  author: DevOps Automation
+  description: ServiceNow problem management for AAP 2.6 - create and link, trend-based candidates, root-cause evidence from AAP job history, update/resolve, list.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms: [{name: GenericLinux, versions: [all]}]
+dependencies: []

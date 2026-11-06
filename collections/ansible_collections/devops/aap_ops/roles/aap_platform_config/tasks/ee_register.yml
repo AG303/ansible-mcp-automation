@@ -1,0 +1,74 @@
+---
+- name: Register or update an execution environment
+  block:
+    - name: Validate input
+      ansible.builtin.assert:
+        that:
+          - ee_name | default('') | trim | length > 0
+          - ee_image | default('') is match('^[a-z0-9.-]+(:[0-9]+)?/[^\\s]+$')
+          - ee_pull | default('missing') in ['always', 'missing', 'never']
+        fail_msg: ee_name, a fully qualified ee_image (registry/namespace/name:tag) and ee_pull (always|missing|never) are required.
+        quiet: true
+
+    - name: Look up organization
+      when: ee_organization | default('') | length > 0
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/organizations/"
+        aap_api_query: {name: "{{ ee_organization }}"}
+
+    - name: Require organization
+      when: ee_organization | default('') | length > 0
+      ansible.builtin.assert:
+        that: aap_api_results | length == 1
+        fail_msg: Organization '{{ ee_organization }}' not found.
+        quiet: true
+
+    - name: Remember organization
+      ansible.builtin.set_fact:
+        _ee_org: "{{ aap_api_results[0].id if ee_organization | default('') | length > 0 else none }}"
+
+    - name: Look up existing EE
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/execution_environments/"
+        aap_api_query: {name: "{{ ee_name | trim }}"}
+
+    - name: Compute desired state
+      ansible.builtin.set_fact:
+        _ee_existing: "{{ aap_api_results | first | default({}) }}"
+        _ee_body:
+          name: "{{ ee_name | trim }}"
+          image: "{{ ee_image | trim }}"
+          pull: "{{ ee_pull | default('missing') }}"
+          organization: "{{ _ee_org }}"
+          description: "Managed by AAP Ops (job {{ tower_job_id | default('local') }})"
+
+    - name: Determine whether a change is needed
+      ansible.builtin.set_fact:
+        _ee_change: >-
+          {{ not _ee_existing or _ee_existing.image != _ee_body.image or _ee_existing.pull != _ee_body.pull
+             or (_ee_existing.organization | default(none)) != _ee_body.organization }}
+
+    - name: Create or update EE
+      when: _ee_change | bool
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/execution_environments/{{ (_ee_existing.id ~ '/') if _ee_existing else '' }}"
+        aap_api_method: "{{ 'PATCH' if _ee_existing else 'POST' }}"
+        aap_api_body: "{{ _ee_body }}"
+        aap_api_status: [200, 201]
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: "{{ ee_name }}"
+            status: "{{ 'changed' if _ee_change | bool else 'ok' }}"
+            summary: >-
+              {{ ('updated' if _ee_existing else 'created') if _ee_change | bool else 'already up to date' }}:
+              {{ ee_image }} (pull {{ ee_pull | default('missing') }}){{ (' in ' ~ ee_organization) if ee_organization | default('') else ' (global)' }}
+            details: {previous_image: "{{ _ee_existing.image | default('') }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: EE register}

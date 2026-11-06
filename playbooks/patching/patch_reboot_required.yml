@@ -1,0 +1,31 @@
+---
+# PATCH - Reboot required check
+# Domain: Patch Management. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Whether each host needs a reboot (needs-restarting, reboot-required, Windows pending reboot keys)
+# and why. Returns aap_ops_result.
+
+- name: PATCH - Reboot required check
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: PATCH - Reboot required check
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run patch_manage/reboot_required
+      ansible.builtin.include_role:
+        name: devops.aap_ops.patch_manage
+        tasks_from: reboot_required
+
+- name: Report - PATCH - Reboot required check
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PATCH - Reboot required check
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

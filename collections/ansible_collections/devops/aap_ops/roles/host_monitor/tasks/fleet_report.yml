@@ -1,0 +1,41 @@
+---
+# One pass across health, time sync and pending reboot; each sub-check records
+# its own aap_ops_host_result which is captured and combined into a risk score.
+- name: Fleet report - health
+  ansible.builtin.include_tasks: health_check.yml
+
+- name: Capture health
+  ansible.builtin.set_fact:
+    _fr_health: "{{ aap_ops_host_result }}"
+
+- name: Fleet report - time sync
+  ansible.builtin.include_tasks: time_sync.yml
+
+- name: Capture time sync
+  ansible.builtin.set_fact:
+    _fr_time: "{{ aap_ops_host_result }}"
+
+- name: Fleet report - reboot required
+  ansible.builtin.include_role:
+    name: devops.aap_ops.patch_manage
+    tasks_from: reboot_required.yml
+
+- name: Capture reboot state
+  ansible.builtin.set_fact:
+    _fr_reboot: "{{ aap_ops_host_result }}"
+
+- name: Combine into fleet result
+  ansible.builtin.set_fact:
+    aap_ops_host_result:
+      status: "{{ _worst }}"
+      summary: "risk={{ _score }} | health: {{ _fr_health.summary }} | time: {{ _fr_time.status }} | reboot: {{ _fr_reboot.summary }}"
+      details:
+        risk_score: "{{ _score | int }}"
+        health: "{{ _fr_health.details }}"
+        time_sync: "{{ _fr_time.details }}"
+        reboot: "{{ _fr_reboot.details }}"
+  vars:
+    _weights: {ok: 0, skipped: 0, changed: 0, warn: 2, fail: 5}
+    _score: "{{ _weights[_fr_health.status] + _weights[_fr_time.status] + _weights[_fr_reboot.status] }}"
+    _sts: "{{ [_fr_health.status, _fr_time.status, _fr_reboot.status] }}"
+    _worst: "{{ 'fail' if 'fail' in _sts else ('warn' if 'warn' in _sts else 'ok') }}"

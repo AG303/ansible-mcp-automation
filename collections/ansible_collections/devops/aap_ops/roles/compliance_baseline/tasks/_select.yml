@@ -1,0 +1,17 @@
+---
+# Sets _profile, _v (profile values) and _controls (controls for this OS + profile)
+- name: Load control catalogues
+  ansible.builtin.include_vars:
+    file: "{{ 'controls_windows.yml' if aap_ops_is_windows else 'controls_linux.yml' }}"
+
+- name: Resolve profile values
+  ansible.builtin.set_fact:
+    _profile: "{{ compliance_profile | default('cis') }}"
+    _v: "{{ compliance_baseline_values[compliance_profile | default('cis')] }}"
+
+- name: Select controls for this OS and profile
+  ansible.builtin.set_fact:
+    _controls: >-
+      {{ (compliance_baseline_windows_controls if aap_ops_is_windows
+          else (compliance_baseline_linux_controls | selectattr('os', 'contains', aap_ops_os)))
+         | selectattr('profiles', 'contains', _profile) | list }}

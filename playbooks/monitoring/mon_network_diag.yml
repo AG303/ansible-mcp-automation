@@ -1,0 +1,32 @@
+---
+# MON - Network diagnostics
+# Domain: Server Monitoring. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Interfaces, default gateway reachability, DNS resolution of given names and interface error
+# counters. Returns aap_ops_result.
+# Survey variables: dns_names
+
+- name: MON - Network diagnostics
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: MON - Network diagnostics
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_monitor/network_diag
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_monitor
+        tasks_from: network_diag
+
+- name: Report - MON - Network diagnostics
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: MON - Network diagnostics
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

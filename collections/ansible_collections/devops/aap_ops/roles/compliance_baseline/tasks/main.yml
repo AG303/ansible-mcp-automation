@@ -1,0 +1,3 @@
+---
+- name: Default to scan
+  ansible.builtin.include_tasks: scan.yml

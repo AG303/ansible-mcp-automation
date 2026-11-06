@@ -1,0 +1,39 @@
+---
+- name: Install auditd
+  ansible.builtin.package:
+    name: "{{ ['audit'] if aap_ops_os == 'rhel' else ['auditd', 'audispd-plugins'] }}"
+    state: present
+  register: _hh_pkg_audit
+
+- name: Baseline audit rules
+  ansible.builtin.template:
+    src: audit.rules.j2
+    dest: /etc/audit/rules.d/50-aap-ops-baseline.rules
+    mode: "0640"
+  register: _hh_rules
+  ignore_errors: "{{ ansible_check_mode and (_hh_pkg_audit is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+  notify: host_hardening load audit rules
+
+- name: Auditd.conf retention
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: '^\s*{{ item.key }}\s*='
+    line: "{{ item.key }} = {{ item.value }}"
+  loop: >-
+    {{ {'max_log_file': host_hardening_auditd_max_log_file, 'num_logs': host_hardening_auditd_num_logs,
+        'max_log_file_action': 'keep_logs' if host_hardening_audit_profile == 'stig' else 'rotate',
+        'space_left_action': 'email', 'admin_space_left_action': 'single' if host_hardening_audit_profile == 'stig' else 'suspend'} | dict2items }}
+  loop_control:
+    label: "{{ item.key }}"
+  register: _hh_auditconf
+  ignore_errors: "{{ ansible_check_mode and (_hh_pkg_audit is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+
+- name: Auditd enabled and running
+  ansible.builtin.service:
+    name: auditd
+    state: started
+    enabled: true
+  ignore_errors: "{{ ansible_check_mode and (_hh_pkg_audit is changed) }}"  # noqa: ignore-errors  check mode only: package not installed yet
+
+- name: Load rules now
+  ansible.builtin.meta: flush_handlers

@@ -1,0 +1,13 @@
+---
+argument_specs:
+  configure:
+    short_description: Configure the update source selected by patch_source
+    options:
+      patch_source: {type: str, default: vendor, choices: [vendor, satellite, mirror, wsus], description: "Update source"}
+      aap_ops_satellite_url: {type: str, description: "Satellite base URL"}
+      aap_ops_satellite_org: {type: str, description: "Satellite organization label"}
+      aap_ops_satellite_activation_key: {type: str, description: "Satellite activation key"}
+      aap_ops_dnf_mirror_baseurl: {type: str, description: "RHEL mirror base URL"}
+      aap_ops_apt_mirror_url: {type: str, description: "Ubuntu mirror URL"}
+      aap_ops_wsus_url: {type: str, description: "WSUS server URL"}
+      aap_ops_wsus_target_group: {type: str, description: "WSUS client-side target group"}

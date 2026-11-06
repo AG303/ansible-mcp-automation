@@ -1,0 +1,3 @@
+---
+- name: Default to health status
+  ansible.builtin.include_tasks: health_status.yml

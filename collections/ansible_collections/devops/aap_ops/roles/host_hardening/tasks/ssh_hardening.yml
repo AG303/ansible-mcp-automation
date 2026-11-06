@@ -1,0 +1,81 @@
+---
+# CHANGING. Linux only. Hardened sshd settings in a managed block at the top of
+# sshd_config (first value wins in sshd), validated with sshd -t before reload.
+- name: SSH hardening
+  block:
+    - name: Lockout guard - connecting user must be in AllowGroups
+      when: _allow_groups | length > 0
+      ansible.builtin.command: id -nG {{ ansible_user_id | quote }}
+      register: _hh_groups
+      changed_when: false
+      check_mode: false
+
+    - name: Lockout guard - assert membership
+      when: _allow_groups | length > 0
+      ansible.builtin.assert:
+        that: _hh_groups.stdout.split() | intersect(_allow_groups) | length > 0
+        fail_msg: >-
+          Refusing to set AllowGroups {{ _allow_groups | join(' ') }}: the automation user {{ ansible_user_id }}
+          is not a member and would be locked out.
+        quiet: true
+
+    - name: Banner text
+      ansible.builtin.copy:
+        dest: /etc/issue.net
+        content: "{{ host_hardening_banner_text }}"
+        mode: "0644"
+
+    - name: Managed sshd block
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        marker: "# {mark} AAP OPS SSH HARDENING (managed by Ansible)"
+        insertbefore: BOF
+        block: |
+          PermitRootLogin {{ permit_root_login | default('no') }}
+          {% for k, v in host_hardening_ssh_settings.items() %}
+          {{ k }} {{ v }}
+          {% endfor %}
+          {% if host_hardening_ssh_set_algorithms | bool %}
+          Ciphers {{ host_hardening_ssh_ciphers }}
+          MACs {{ host_hardening_ssh_macs }}
+          KexAlgorithms {{ host_hardening_ssh_kex }}
+          {% endif %}
+          {% if _allow_groups | length > 0 %}
+          AllowGroups {{ _allow_groups | join(' ') }}
+          {% endif %}
+        validate: /usr/sbin/sshd -t -f %s
+        backup: true
+        mode: "0600"
+      register: _hh_ssh
+      notify: host_hardening reload sshd
+
+    - name: Validate effective configuration
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+      check_mode: false
+
+    - name: Apply reload now
+      ansible.builtin.meta: flush_handlers
+
+    - name: Effective settings
+      ansible.builtin.shell: |
+        set -o pipefail
+        sshd -T 2>/dev/null | grep -Ei '^(permitrootlogin|permitemptypasswords|maxauthtries|clientaliveinterval|x11forwarding|banner|allowgroups|ciphers|macs) '
+      args:
+        executable: /bin/bash
+      register: _hh_eff
+      changed_when: false
+      check_mode: false
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if _hh_ssh.changed else 'ok' }}"
+          summary: "sshd hardened (PermitRootLogin {{ permit_root_login | default('no') }}{{ ', AllowGroups ' ~ _allow_groups | join(' ') if _allow_groups else '' }}){{ '' if _hh_ssh.changed else ' - already compliant' }}"
+          details: {effective: "{{ _hh_eff.stdout_lines }}", backup: "{{ _hh_ssh.backup | default('') }}"}
+  vars:
+    _allow_groups: "{{ (allow_groups | default('')).split() | select | list }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: SSH hardening}

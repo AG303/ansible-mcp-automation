@@ -1,0 +1,28 @@
+---
+# Connection settings resolve from the environment injected by the AAP
+# "Red Hat Ansible Automation Platform" credential type (AAP_* in 2.5+/2.6,
+# CONTROLLER_* for compatibility). Override with extra vars for local runs.
+aap_api_host: >-
+  {{ lookup('ansible.builtin.env', 'AAP_HOSTNAME')
+     or lookup('ansible.builtin.env', 'CONTROLLER_HOST')
+     or lookup('ansible.builtin.env', 'TOWER_HOST') }}
+aap_api_token: >-
+  {{ lookup('ansible.builtin.env', 'AAP_TOKEN')
+     or lookup('ansible.builtin.env', 'CONTROLLER_OAUTH_TOKEN')
+     or lookup('ansible.builtin.env', 'TOWER_OAUTH_TOKEN') }}
+aap_api_username: >-
+  {{ lookup('ansible.builtin.env', 'AAP_USERNAME')
+     or lookup('ansible.builtin.env', 'CONTROLLER_USERNAME') }}
+aap_api_password: >-
+  {{ lookup('ansible.builtin.env', 'AAP_PASSWORD')
+     or lookup('ansible.builtin.env', 'CONTROLLER_PASSWORD') }}
+aap_api_validate_certs: >-
+  {{ (lookup('ansible.builtin.env', 'AAP_VALIDATE_CERTS')
+      or lookup('ansible.builtin.env', 'CONTROLLER_VERIFY_SSL')
+      or 'true') | bool }}
+# AAP 2.5/2.6 route everything through the platform gateway.
+aap_api_controller_path: /api/controller/v2
+aap_api_gateway_path: /api/gateway/v1
+aap_api_page_size: 200
+aap_api_max_pages: 25
+aap_api_timeout: 60

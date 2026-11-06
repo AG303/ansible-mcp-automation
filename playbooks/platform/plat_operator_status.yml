@@ -1,0 +1,21 @@
+---
+# PLAT - Operator version and upgrade status
+# Domain: Platform Configuration. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. AAP operator ClusterServiceVersion, subscription channel, install plan approval mode and pending
+# install plans. Returns aap_ops_result.
+# Survey variables: aap_namespace
+
+- name: PLAT - Operator version and upgrade status
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_ops_report_title: PLAT - Operator version and upgrade status
+  tasks:
+    - name: Run aap_operator/operator_status
+      ansible.builtin.include_role:
+        name: devops.aap_ops.aap_operator
+        tasks_from: operator_status
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

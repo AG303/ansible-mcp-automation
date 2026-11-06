@@ -1,0 +1,82 @@
+---
+- name: Host health check
+  block:
+    - name: Linux - sample CPU and load
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        idle=$(vmstat 1 2 | tail -1 | awk '{print $15}')
+        read l1 l5 l15 _ < /proc/loadavg
+        swap=$(free -m | awk '/^Swap:/ {print $2" "$3}')
+        echo "{\"cpu_pct\": $((100 - idle)), \"load1\": $l1, \"load5\": $l5, \"load15\": $l15, \"swap_total_mb\": ${swap%% *}, \"swap_used_mb\": ${swap##* }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: _hc_linux
+
+    - name: Windows - sample CPU, memory and disks
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+        $os = Get-CimInstance Win32_OperatingSystem
+        $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+          @{ mount = $_.DeviceID; size_mb = [math]::Round($_.Size/1MB); free_mb = [math]::Round($_.FreeSpace/1MB) } }
+        @{ cpu_pct = [int]$cpu
+           mem_total_mb = [math]::Round($os.TotalVisibleMemorySize/1KB)
+           mem_free_mb = [math]::Round($os.FreePhysicalMemory/1KB)
+           swap_total_mb = [math]::Round(($os.SizeStoredInPagingFiles)/1KB)
+           swap_used_mb = [math]::Round(($os.SizeStoredInPagingFiles - $os.FreeSpaceInPagingFiles)/1KB)
+           uptime_hours = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 1)
+           disks = @($disks) } | ConvertTo-Json -Depth 4 -Compress
+      changed_when: false
+      check_mode: false
+      register: _hc_win
+
+    - name: Normalise metrics
+      ansible.builtin.set_fact:
+        _hc: >-
+          {%- if aap_ops_is_windows -%}
+          {%-   set w = _hc_win.stdout | from_json -%}
+          {{ {'cpu_pct': w.cpu_pct | int, 'load1': none,
+              'mem_used_pct': (100 - (w.mem_free_mb / w.mem_total_mb * 100)) | round(1),
+              'swap_used_pct': ((w.swap_used_mb / w.swap_total_mb * 100) | round(1)) if w.swap_total_mb | int > 0 else 0,
+              'uptime_hours': w.uptime_hours,
+              'disks': w.disks | map('combine', {}) | list} }}
+          {%- else -%}
+          {%-   set l = _hc_linux.stdout | from_json -%}
+          {%-   set ds = [] -%}
+          {%-   for m in ansible_mounts | default([]) if m.fstype not in host_monitor_fs_exclude and m.size_total | int > 0 -%}
+          {%-     set _ = ds.append({'mount': m.mount, 'size_mb': (m.size_total / 1048576) | int, 'free_mb': (m.size_available / 1048576) | int}) -%}
+          {%-   endfor -%}
+          {{ {'cpu_pct': l.cpu_pct | int, 'load1': l.load1, 'load5': l.load5, 'load15': l.load15,
+              'cpu_count': ansible_processor_vcpus | default(1),
+              'mem_used_pct': (100 - (ansible_memory_mb.nocache.free / ansible_memtotal_mb * 100)) | round(1),
+              'swap_used_pct': ((l.swap_used_mb / l.swap_total_mb * 100) | round(1)) if l.swap_total_mb | int > 0 else 0,
+              'uptime_hours': ((ansible_uptime_seconds | default(0) | int) / 3600) | round(1),
+              'disks': ds} }}
+          {%- endif -%}
+
+    - name: Evaluate thresholds
+      ansible.builtin.set_fact:
+        _hc_issues: >-
+          {%- set i = [] -%}
+          {%- if _hc.cpu_pct | int >= cpu_warn_pct | default(85) | int -%}{%- set _ = i.append('cpu ' ~ _hc.cpu_pct ~ '%') -%}{%- endif -%}
+          {%- if _hc.mem_used_pct | float >= mem_warn_pct | default(90) | float -%}{%- set _ = i.append('memory ' ~ _hc.mem_used_pct ~ '%') -%}{%- endif -%}
+          {%- if _hc.load1 is not none and (_hc.load1 | float) > (_hc.cpu_count | default(1) | float) * 2 -%}{%- set _ = i.append('load ' ~ _hc.load1) -%}{%- endif -%}
+          {%- for d in _hc.disks -%}
+          {%-   set pct = (100 - d.free_mb / d.size_mb * 100) | round(1) -%}
+          {%-   if pct >= disk_warn_pct | default(85) | float -%}{%- set _ = i.append('disk ' ~ d.mount ~ ' ' ~ pct ~ '%') -%}{%- endif -%}
+          {%- endfor -%}
+          {{ i }}
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'fail' if _hc_issues | length > 2 else ('warn' if _hc_issues | length > 0 else 'ok') }}"
+          summary: "{{ 'Healthy' if _hc_issues | length == 0 else 'Threshold exceeded: ' ~ (_hc_issues | join(', ')) }}"
+          details: "{{ _hc | combine({'issues': _hc_issues}) }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Health check}

@@ -1,0 +1,89 @@
+---
+- name: Local account audit
+  block:
+    - name: Linux - account facts
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        now=$(( $(date +%s) / 86400 ))
+        echo '---uid0'; awk -F: '($3 == 0) {print $1}' /etc/passwd
+        echo '---empty'; awk -F: '($2 == "") {print $1}' /etc/shadow
+        echo '---noexpire'; awk -F: -v min=1000 'NR==FNR { if ($3 >= min && $3 < 65534) u[$1]=1; next } ($1 in u) && ($5 == "" || $5 >= 99999) && $2 !~ /^[!*]/ {print $1}' /etc/passwd /etc/shadow
+        echo '---interactive'; awk -F: '($3 >= 1000 && $3 < 65534 && $7 !~ /(nologin|false)$/) {print $1}' /etc/passwd
+        echo '---sudoers'; grep -Ehv '^\s*(#|$|Defaults)' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | head -50
+        echo '---admgroups'; getent group wheel sudo admin 2>/dev/null | cut -d: -f1,4
+        echo '---lastlog'
+        # users with no login in N days (or never); lastlog2 on newer Ubuntu
+        inter=$(awk -F: '($3 >= 1000 && $3 < 65534 && $7 !~ /(nologin|false)$/) {print $1}' /etc/passwd)
+        if command -v lastlog >/dev/null 2>&1; then
+          lastlog -b {{ stale_days | default(90) | int }} 2>/dev/null | awk 'NR>1 {print $1}' | grep -Fx -f <(echo "$inter") || true
+        elif command -v lastlog2 >/dev/null 2>&1; then
+          for u in $inter; do lastlog2 -u "$u" 2>/dev/null | grep -q 'Never logged in' && echo "$u"; done
+        fi
+        true
+      args:
+        executable: /bin/bash
+      register: _ua_linux
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - account facts
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $stale = {{ stale_days | default(90) | int }}
+        $users = Get-LocalUser | ForEach-Object {
+          $days = if ($_.LastLogon) { [int]((Get-Date) - $_.LastLogon).TotalDays } else { $null }
+          @{ name = $_.Name; enabled = $_.Enabled; password_required = $_.PasswordRequired; password_expires = [bool]$_.PasswordExpires
+             last_logon_days = $days; sid = "$($_.SID)" } }
+        $admins = @(Get-LocalGroupMember -Group Administrators -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)" })
+        @{ users = @($users); admins = $admins } | ConvertTo-Json -Depth 4 -Compress
+      register: _ua_win
+      changed_when: false
+      check_mode: false
+
+    - name: Normalise
+      ansible.builtin.set_fact:
+        _ua: >-
+          {%- if aap_ops_is_windows -%}
+          {%-   set w = _ua_win.stdout | from_json -%}
+          {%-   set en = w.users | selectattr('enabled') | list -%}
+          {{ {'uid0_or_admins': w.admins,
+              'empty_password': en | rejectattr('password_required') | map(attribute='name') | list,
+              'never_expiring': en | rejectattr('password_expires') | map(attribute='name') | list,
+              'stale': en | selectattr('last_logon_days', 'number') | selectattr('last_logon_days', '>', stale_days | default(90) | int) | map(attribute='name') | list
+                       + (en | rejectattr('last_logon_days', 'number') | map(attribute='name') | list),
+              'enabled_accounts': en | map(attribute='name') | list,
+              'guest_enabled': (en | selectattr('sid', 'search', '-501$') | list | length) > 0,
+              'sudoers': []} }}
+          {%- else -%}
+          {%-   set sec = {} -%}{%- set cur = namespace(k='') -%}
+          {%-   for l in _ua_linux.stdout_lines -%}
+          {%-     if l.startswith('---') -%}{%- set cur.k = l[3:] -%}{%- set _ = sec.update({cur.k: []}) -%}
+          {%-     elif cur.k -%}{%- set _ = sec[cur.k].append(l) -%}{%- endif -%}
+          {%-   endfor -%}
+          {%-   set stale = sec.lastlog | default([]) -%}
+          {{ {'uid0_or_admins': sec.uid0 | default([]) + sec.admgroups | default([]),
+              'uid0_extra': sec.uid0 | default([]) | reject('equalto', 'root') | list,
+              'empty_password': sec.empty | default([]),
+              'never_expiring': sec.noexpire | default([]),
+              'stale': stale,
+              'enabled_accounts': sec.interactive | default([]),
+              'sudoers': sec.sudoers | default([]) | select('search', 'NOPASSWD') | list,
+              'guest_enabled': false} }}
+          {%- endif -%}
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if (_ua.empty_password | length > 0 or _ua.uid0_extra | default([]) | length > 0 or _ua.guest_enabled)
+               else ('warn' if (_ua.stale | length > 0 or _ua.never_expiring | length > 0 or _ua.sudoers | length > 0) else 'ok') }}
+          summary: >-
+            {{ _ua.enabled_accounts | length }} interactive accounts; {{ _ua.empty_password | length }} empty-password;
+            {{ _ua.uid0_extra | default([]) | length }} extra UID 0; {{ _ua.never_expiring | length }} never-expiring;
+            {{ _ua.stale | length }} stale (>{{ stale_days | default(90) }}d){{ '; NOPASSWD sudo rules present' if _ua.sudoers else '' }}{{ '; Guest ENABLED' if _ua.guest_enabled else '' }}
+          details: "{{ _ua }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: User audit}

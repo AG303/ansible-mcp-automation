@@ -1,0 +1,32 @@
+---
+- name: Compliance scan
+  block:
+    - name: Select controls
+      ansible.builtin.include_tasks: _select.yml
+
+    - name: Run checks
+      ansible.builtin.include_tasks: _run_scan.yml
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: >-
+            {{ 'fail' if (_score | float < min_score_pct | default(80) | float or _failed | selectattr('severity', 'equalto', 'high') | list | length > 0)
+               else ('warn' if _failed | length > 0 else 'ok') }}
+          summary: >-
+            {{ _profile | upper }} score {{ _score }}% ({{ _scan | length - _failed | length }}/{{ _scan | length }} passed);
+            {{ _failed | selectattr('severity', 'equalto', 'high') | list | length }} high-severity; failed{{ (': ' ~ (_failed | map(attribute='id') | join(', ') | truncate(200))) if _failed else '' }}
+          details:
+            profile: "{{ _profile }}"
+            score_pct: "{{ _score }}"
+            passed: "{{ _scan | length - _failed | length }}"
+            total: "{{ _scan | length }}"
+            failed_controls: "{{ _failed }}"
+            remediable: "{{ _failed | selectattr('automatable') | map(attribute='id') | list }}"
+      vars:
+        _failed: "{{ _scan | rejectattr('pass') | list }}"
+        _score: "{{ ((_scan | selectattr('pass') | list | length) / ([_scan | length, 1] | max) * 100) | round(1) }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Compliance scan}

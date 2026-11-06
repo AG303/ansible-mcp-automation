@@ -1,0 +1,35 @@
+---
+# Applies aap_config/vars with infra.aap_configuration. Runs only through the
+# "WF - PLAT - Apply config-as-code" workflow (approval node). Uses the same
+# AAP credential environment as the other API roles.
+- name: Apply config-as-code
+  block:
+    - name: Load desired configuration
+      ansible.builtin.include_vars:
+        dir: "{{ aap_platform_config_vars_dir }}"
+        extensions: [yml, yaml]
+
+    - name: Dispatch infra.aap_configuration
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.dispatch
+      vars:
+        aap_hostname: "{{ _aap_api_base }}"
+        aap_token: "{{ aap_api_token | trim }}"
+        aap_username: "{{ aap_api_username if _aap_api_basic else omit }}"
+        aap_password: "{{ aap_api_password if _aap_api_basic else omit }}"
+        aap_validate_certs: "{{ aap_api_validate_certs }}"
+        aap_configuration_secure_logging: true
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: config-as-code
+            status: changed
+            summary: >-
+              Applied {{ controller_templates | default([]) | length }} job templates, {{ controller_workflows | default([]) | length }} workflows,
+              {{ controller_credentials | default([]) | length }} credentials, {{ controller_roles | default([]) | length }} role assignments
+            details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Config apply}

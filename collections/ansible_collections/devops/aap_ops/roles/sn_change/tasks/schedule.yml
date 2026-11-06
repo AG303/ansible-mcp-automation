@@ -1,0 +1,49 @@
+---
+- name: Upcoming and active changes
+  block:
+    - name: Query scheduled/implementing changes in the look-ahead window
+      ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+      vars:
+        sn_q_table: change_request
+        sn_q_query: >-
+          stateIN{{ sn_change_state_map.authorize }},{{ sn_change_state_map.scheduled }},{{ sn_change_state_map.implement }}
+          ^start_date<={{ '%Y-%m-%d %H:%M:%S' | strftime(now().timestamp() + (days | default(7) | int) * 86400, utc=true) }}
+          ^end_date>={{ '%Y-%m-%d %H:%M:%S' | strftime(now().timestamp() - 86400, utc=true) }}
+          {{- ('^assignment_group.name=' ~ sn_assignment_group | trim) if sn_assignment_group | default('') | trim else '' }}^ORDERBYstart_date
+        sn_q_fields: [number, short_description, type, state, approval, start_date, end_date, cmdb_ci, assignment_group, correlation_id]
+        sn_q_limit: "{{ sn_change_schedule_limit }}"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + _rows }}"
+      vars:
+        _rows: >-
+          {%- set now_e = now().timestamp() -%}
+          {%- set out = [] -%}
+          {%- for c in sn_q_records -%}
+          {%-   set s = ((c.start_date ~ ' +0000') | to_datetime('%Y-%m-%d %H:%M:%S %z')).timestamp() if c.start_date else 0 -%}
+          {%-   set e = ((c.end_date ~ ' +0000') | to_datetime('%Y-%m-%d %H:%M:%S %z')).timestamp() if c.end_date else 0 -%}
+          {%-   set issues = [] -%}
+          {%-   if c.state | string == sn_change_state_map.implement and e < now_e -%}{%- set _ = issues.append('implementing past planned end') -%}{%- endif -%}
+          {%-   if c.state | string == sn_change_state_map.scheduled and e < now_e -%}{%- set _ = issues.append('window passed without implementation') -%}{%- endif -%}
+          {%-   if c.approval != 'approved' and s - now_e < 86400 and s > now_e - 86400 -%}{%- set _ = issues.append('starts within 24h but not approved (' ~ c.approval ~ ')') -%}{%- endif -%}
+          {%-   set st = (sn_change_state_map | dict2items | selectattr('value', 'equalto', c.state | string) | map(attribute='key') | first | default(c.state)) -%}
+          {%-   set _ = out.append({'host': c.number, 'status': 'warn' if issues else 'ok',
+                   'summary': c.type ~ ' | ' ~ st ~ ' | ' ~ c.approval ~ ' | ' ~ c.start_date ~ ' - ' ~ c.end_date ~ ' UTC | ' ~ c.short_description | truncate(90)
+                              ~ ((' - ' ~ issues | join('; ')) if issues else ''),
+                   'details': {'aap': (c.correlation_id | default('')).startswith(sn_correlation_prefix ~ ':change:'),
+                               'aap_template': (c.correlation_id | default(''))[(sn_correlation_prefix ~ ':change:') | length:] if (c.correlation_id | default('')).startswith(sn_correlation_prefix ~ ':change:') else '',
+                               'issues': issues}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _rows | selectattr('status', 'equalto', 'warn') | list else 'ok' }}"
+          summary: >-
+            {{ sn_q_records | length }} change(s) authorizing/scheduled/implementing in the next {{ days | default(7) }} day(s);
+            {{ _rows | selectattr('details.aap') | list | length }} for AAP workflows; {{ _rows | selectattr('status', 'equalto', 'warn') | list | length }} need attention
+          details: {}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Change schedule}

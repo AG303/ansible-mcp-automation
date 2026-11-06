@@ -1,0 +1,42 @@
+---
+- name: Subscription and usage
+  block:
+    - name: Get controller config
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/config/"
+
+    - name: Keep license info
+      ansible.builtin.set_fact:
+        _lic: "{{ aap_api_response.json.license_info | default({}) }}"
+        _ver: "{{ aap_api_response.json.version | default('?') }}"
+
+    - name: Get host metrics
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/host_metrics/"
+        aap_api_query: {deleted: "false"}
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows:
+          - host: subscription
+            status: >-
+              {{ 'fail' if (not _lic.compliant | default(true) or _lic.date_expired | default(false))
+                 else ('warn' if (_days_left | int < 60 or _pct | float > 90) else 'ok') }}
+            summary: >-
+              {{ _lic.subscription_name | default('no subscription') }}; {{ _lic.current_instances | default(aap_api_count) }} of
+              {{ _lic.instance_count | default('?') }} managed nodes used ({{ _pct }}%); {{ _days_left }} day(s) remaining;
+              compliant={{ _lic.compliant | default('?') }}; controller {{ _ver }}
+            details:
+              automated_hosts_total: "{{ aap_api_count }}"
+              free_instances: "{{ _lic.free_instances | default('') }}"
+              license_type: "{{ _lic.license_type | default('') }}"
+              top_automated_hosts: "{{ (aap_api_results | sort(attribute='automated_counter', reverse=true))[:10] | map(attribute='hostname') | list }}"
+      vars:
+        _days_left: "{{ ((_lic.time_remaining | default(0) | int) / 86400) | int }}"
+        _pct: "{{ (((_lic.current_instances | default(aap_api_count) | int) * 100.0) / ([_lic.instance_count | default(1) | int, 1] | max)) | round(1) }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: Subscription usage}

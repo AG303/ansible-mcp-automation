@@ -1,0 +1,67 @@
+---
+- name: Port and endpoint reachability
+  block:
+    - name: Linux - test TCP endpoints
+      when: not aap_ops_is_windows and _pc_targets | length > 0
+      ansible.builtin.wait_for:
+        host: "{{ item.split(':')[0] }}"
+        port: "{{ item.split(':')[-1] | int }}"
+        timeout: "{{ timeout_sec | default(5) | int }}"
+      loop: "{{ _pc_targets }}"
+      register: _pc_linux
+      ignore_errors: true
+
+    - name: Windows - test TCP endpoints
+      when: aap_ops_is_windows and _pc_targets | length > 0
+      ansible.windows.win_wait_for:
+        host: "{{ item.split(':')[0] }}"
+        port: "{{ item.split(':')[-1] | int }}"
+        timeout: "{{ timeout_sec | default(5) | int }}"
+      loop: "{{ _pc_targets }}"
+      register: _pc_win
+      ignore_errors: true
+
+    - name: Linux - listening ports
+      when: not aap_ops_is_windows
+      ansible.builtin.shell: |
+        set -o pipefail
+        ss -Hltn | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -un | paste -sd, -
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: _pc_listen_linux
+
+    - name: Windows - listening ports
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        (Get-NetTCPConnection -State Listen | Select-Object -ExpandProperty LocalPort | Sort-Object -Unique) -join ','
+      changed_when: false
+      check_mode: false
+      register: _pc_listen_win
+
+    - name: Build results
+      ansible.builtin.set_fact:
+        _pc: >-
+          {%- set res = (_pc_win if aap_ops_is_windows else _pc_linux).results | default([]) -%}
+          {%- set out = [] -%}
+          {%- for r in res -%}
+          {%-   set _ = out.append({'endpoint': r.item, 'reachable': not (r.failed | default(false)), 'elapsed': r.elapsed | default(none)}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _pc_listen: "{{ ((_pc_listen_win if aap_ops_is_windows else _pc_listen_linux).stdout | default('') | trim).split(',') | select | list }}"
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'fail' if _pc | rejectattr('reachable') | list | length > 0 else 'ok' }}"
+          summary: >-
+            {%- set bad = _pc | rejectattr('reachable') | map(attribute='endpoint') | list -%}
+            {{ ('Unreachable: ' ~ bad | join(', ')) if bad else ((_pc | length) ~ ' endpoint(s) reachable') }}; {{ _pc_listen | length }} local listening ports
+          details: {endpoints: "{{ _pc }}", listening_tcp_ports: "{{ _pc_listen }}"}
+  vars:
+    _pc_targets: "{{ (endpoints | default('')).split(',') | map('trim') | select('search', ':') | list }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Port check}

@@ -1,0 +1,111 @@
+---
+# CHANGING. Playbook runs this with serial: "<serial_pct>%" for rolling batches.
+- name: Apply updates
+  block:
+    - name: RHEL - apply updates
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        security: "{{ _sec_only }}"
+        exclude: "{{ _excludes }}"
+        update_only: true
+      register: _pa_rhel
+
+    - name: Ubuntu - list security upgrades
+      when: aap_ops_os == 'ubuntu' and _sec_only
+      ansible.builtin.include_tasks: _list_updates.yml
+
+    - name: Ubuntu - apply security updates
+      when: aap_ops_os == 'ubuntu' and _sec_only and _sec_pkgs | length > 0
+      ansible.builtin.apt:
+        name: "{{ _sec_pkgs }}"
+        state: latest
+        only_upgrade: true
+        update_cache: false
+      register: _pa_ubuntu_sec
+      vars:
+        _sec_pkgs: "{{ _updates | selectattr('security') | map(attribute='name') | reject('in', _excludes) | list }}"
+
+    - name: Ubuntu - hold excluded packages for this run
+      when: aap_ops_os == 'ubuntu' and not _sec_only and _excludes | length > 0
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ _excludes }}"
+      register: _pa_ubuntu_hold
+
+    - name: Ubuntu - apply all updates
+      when: aap_ops_os == 'ubuntu' and not _sec_only
+      ansible.builtin.apt:
+        upgrade: safe
+        update_cache: true
+        cache_valid_time: "{{ patch_manage_apt_cache_valid_time }}"
+      register: _pa_ubuntu_all
+
+    - name: Ubuntu - release temporary holds
+      when: aap_ops_os == 'ubuntu' and not _sec_only and _excludes | length > 0
+      ansible.builtin.dpkg_selections:
+        name: "{{ item.item }}"
+        selection: install
+      loop: "{{ _pa_ubuntu_hold.results | default([]) | selectattr('changed') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Windows - install updates
+      when: aap_ops_is_windows
+      ansible.windows.win_updates:
+        state: installed
+        category_names: "{{ patch_manage_win_categories_security if _sec_only else patch_manage_win_categories_all }}"
+        reject_list: "{{ _excludes }}"
+        reboot: "{{ _reboot_policy != 'never' }}"
+        reboot_timeout: "{{ patch_manage_reboot_timeout }}"
+      register: _pa_win
+
+    - name: Reboot status after apply
+      ansible.builtin.include_tasks: reboot_required.yml
+
+    - name: Linux - reboot per policy
+      when: >-
+        not aap_ops_is_windows and
+        (_reboot_policy == 'always' or (_reboot_policy == 'if_required' and _rr.required))
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ patch_manage_reboot_timeout }}"
+        msg: "Rebooting after patching by Ansible Automation Platform"
+      register: _pa_reboot
+
+    - name: Windows - forced reboot (policy always)
+      when: aap_ops_is_windows and _reboot_policy == 'always' and not (_pa_win.reboot_required | default(false))
+      ansible.windows.win_reboot:
+        reboot_timeout: "{{ patch_manage_reboot_timeout }}"
+      register: _pa_reboot_win
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'changed' if _changed else 'ok' }}"
+          summary: >-
+            {{ _count }} update(s) applied{{ ' (security only)' if _sec_only else '' }};
+            {{ 'rebooted' if (_pa_reboot.rebooted | default(false) or _pa_reboot_win.rebooted | default(false) or _pa_win.reboot_required | default(false)) else ('reboot pending' if _rr.required else 'no reboot needed') }}
+          details:
+            security_only: "{{ _sec_only }}"
+            excluded: "{{ _excludes }}"
+            reboot_policy: "{{ _reboot_policy }}"
+            applied: "{{ _applied[:patch_manage_max_list | int] }}"  # noqa: jinja[invalid]
+      vars:
+        _applied: >-
+          {{ (_pa_rhel.results | default([]) | select('string') | list) if aap_ops_os == 'rhel'
+             else ((_pa_ubuntu_sec.stdout_lines | default(_pa_ubuntu_all.stdout_lines | default([]))) | select('search', '^(Inst|Setting up) ') | list) if aap_ops_os == 'ubuntu'
+             else ((_pa_win.updates | default({})).values() | map(attribute='title') | list) }}
+        _count: >-
+          {{ (_pa_win.installed_update_count | default(0)) if aap_ops_is_windows
+             else (_applied | length if _applied | length > 0 else ('some' if _changed else 0)) }}
+        _changed: "{{ (_pa_rhel.changed | default(false)) or (_pa_ubuntu_sec.changed | default(false)) or (_pa_ubuntu_all.changed | default(false)) or (_pa_win.changed | default(false)) }}"
+  vars:
+    _sec_only: "{{ security_only | default('yes') | bool }}"
+    _excludes: "{{ (exclude_packages | default('')).split(',') | map('trim') | select | list }}"
+    _reboot_policy: "{{ reboot_policy | default('if_required') }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: Apply updates}

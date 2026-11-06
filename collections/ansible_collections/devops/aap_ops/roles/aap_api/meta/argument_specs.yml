@@ -1,0 +1,16 @@
+---
+argument_specs:
+  main:
+    short_description: Resolve AAP API connection settings
+    options:
+      aap_api_host: {type: str, description: "Gateway URL, e.g. https://aap.apps.example.com"}
+      aap_api_token: {type: str, description: "OAuth2 or personal access token (preferred)"}
+      aap_api_username: {type: str, description: "Username when no token is available"}
+      aap_api_password: {type: str, description: "Password when no token is available"}
+      aap_api_validate_certs: {type: bool, default: true, description: "Validate TLS"}
+  get:
+    short_description: Paginated GET of a controller or gateway list endpoint into aap_api_results
+    options:
+      aap_api_path: {type: str, required: true, description: "Path below the API root, e.g. /api/controller/v2/jobs/"}
+      aap_api_query: {type: dict, default: {}, description: "Query parameters"}
+      aap_api_max_pages: {type: int, default: 25, description: "Page limit"}

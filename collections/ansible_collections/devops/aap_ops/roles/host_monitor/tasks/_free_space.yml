@@ -1,0 +1,19 @@
+---
+# Sets _free_mb for the system volume (/ or C:)
+- name: Linux - free MB on /
+  when: not aap_ops_is_windows
+  ansible.builtin.command: df -Pm /
+  register: _fs_linux
+  changed_when: false
+  check_mode: false
+
+- name: Windows - free MB on system drive
+  when: aap_ops_is_windows
+  ansible.windows.win_shell: "[math]::Round((Get-PSDrive ($env:SystemDrive.TrimEnd(':'))).Free/1MB)"
+  register: _fs_win
+  changed_when: false
+  check_mode: false
+
+- name: Set _free_mb
+  ansible.builtin.set_fact:
+    _free_mb: "{{ (_fs_win.stdout | trim | int) if aap_ops_is_windows else (_fs_linux.stdout_lines[-1].split()[3] | int) }}"

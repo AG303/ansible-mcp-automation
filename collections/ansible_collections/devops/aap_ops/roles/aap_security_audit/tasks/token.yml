@@ -1,0 +1,53 @@
+---
+- name: API token audit
+  block:
+    - name: Get gateway OAuth2 tokens
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_g }}/tokens/"
+
+    - name: Strip token values
+      ansible.builtin.set_fact:
+        _tokens: "{{ aap_api_results | map('ansible.utils.remove_keys', target=['token', 'refresh_token']) | list }}"
+      no_log: true
+
+    - name: Get OAuth2 applications
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: get}
+      vars:
+        aap_api_path: "{{ aap_api_g }}/applications/"
+
+    - name: Build report rows
+      ansible.builtin.set_fact:
+        aap_ops_report_rows: "{{ [_summary] + (_rows | rejectattr('status', 'equalto', 'ok') | list) }}"
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for t in _tokens -%}
+          {%-   set age = ((now().timestamp() - ((t.created[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 86400) | int -%}
+          {%-   set life = ((((t.expires[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp() - now().timestamp()) / 86400) | int if t.expires else 99999 -%}
+          {%-   set unused = (((now().timestamp() - ((t.last_used[:19] ~ '+0000') | to_datetime('%Y-%m-%dT%H:%M:%S%z')).timestamp()) / 86400) | int) if t.last_used | default('') else -1 -%}
+          {%-   set issues = [] -%}
+          {%-   if age > (max_age_days | default(90) | int) -%}{%- set _ = issues.append('age ' ~ age ~ ' days') -%}{%- endif -%}
+          {%-   if life > 365 -%}{%- set _ = issues.append('expiry more than a year out or none') -%}{%- endif -%}
+          {%-   if t.scope | default('') == 'write' -%}{%- set _ = issues.append('write scope') -%}{%- endif -%}
+          {%-   if unused < 0 or unused > 30 -%}{%- set _ = issues.append('unused for 30+ days') -%}{%- endif -%}
+          {%-   set owner = t.summary_fields.user.username | default(t.user | default('?')) -%}
+          {%-   set _ = out.append({'host': 'token ' ~ t.id ~ ' (' ~ owner ~ ')',
+                 'status': 'fail' if (age > (max_age_days | default(90) | int) and t.scope | default('') == 'write') else ('warn' if issues else 'ok'),
+                 'summary': (t.scope | default('?')) ~ ' scope, ' ~ age ~ ' days old, app ' ~ t.summary_fields.application.name | default('PAT') ~ ((' - ' ~ issues | join('; ')) if issues else ''),
+                 'details': {'id': t.id, 'user': owner, 'description': t.description | default(''), 'age_days': age,
+                             'expires': t.expires, 'issues': issues}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary:
+          host: summary
+          status: "{{ 'warn' if _rows | rejectattr('status', 'equalto', 'ok') | list | length > 0 else 'ok' }}"
+          summary: >-
+            {{ _tokens | length }} token(s), {{ aap_api_results | length }} OAuth2 application(s);
+            {{ _rows | rejectattr('status', 'equalto', 'ok') | list | length }} token(s) exceed policy (max age {{ max_age_days | default(90) }} days).
+            MCP clients should use short-lived read-scoped PATs.
+          details: {applications: "{{ aap_api_results | map(attribute='name') | list }}"}
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue_api}
+      vars: {aap_ops_check_name: API token audit}

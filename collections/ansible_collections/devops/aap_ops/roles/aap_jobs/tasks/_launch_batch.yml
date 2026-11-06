@@ -1,0 +1,22 @@
+---
+- name: "Batch {{ _batch_idx + 1 }} - launch"
+  when: (_launch_results | default([]) | rejectattr('status', 'equalto', 'successful') | list | length) == 0
+  block:
+    - name: "Launch {{ _jt.name }} limit={{ _batch or 'default' }}"
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: request}
+      vars:
+        aap_api_path: "{{ aap_api_c }}/job_templates/{{ _jt.id }}/launch/"
+        aap_api_method: POST
+        aap_api_body: "{{ {'limit': _batch} if _batch | length > 0 else {} }}"
+        aap_api_status: [201]
+
+    - name: "Batch {{ _batch_idx + 1 }} - wait"
+      ansible.builtin.include_role: {name: devops.aap_ops.aap_api, tasks_from: wait_job}
+      vars:
+        aap_api_job_path: "{{ aap_api_c }}/jobs/{{ aap_api_response.json.id }}/"
+
+    - name: "Batch {{ _batch_idx + 1 }} - record"
+      ansible.builtin.set_fact:
+        _launch_results: >-
+          {{ _launch_results | default([]) + [{'batch': _batch_idx + 1, 'limit': _batch, 'id': aap_api_job.id,
+                                               'status': aap_api_job.status, 'elapsed': aap_api_job.elapsed | round(1)}] }}

@@ -1,0 +1,32 @@
+---
+# MON - Host health check
+# Domain: Server Monitoring. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. CPU, memory, swap, load, disk and uptime per host with ok/warn/fail against thresholds. Returns
+# aap_ops_result.
+# Survey variables: cpu_warn_pct, mem_warn_pct, disk_warn_pct
+
+- name: MON - Host health check
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: MON - Host health check
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_monitor/health_check
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_monitor
+        tasks_from: health_check
+
+- name: Report - MON - Host health check
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: MON - Host health check
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

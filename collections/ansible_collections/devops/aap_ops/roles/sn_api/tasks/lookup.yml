@@ -1,0 +1,33 @@
+---
+- name: "Look up {{ sn_lookup_table }} {{ sn_lookup_number }}"
+  servicenow.itsm.api_info:
+    resource: "{{ sn_lookup_table }}"
+    sysparm_query: "number={{ sn_lookup_number | trim | upper }}"
+    display_value: "all"
+  register: _sn_lookup
+
+- name: "Fail when {{ sn_lookup_number }} does not exist"
+  ansible.builtin.assert:
+    that: _sn_lookup.record | length == 1
+    fail_msg: "{{ sn_lookup_table }} {{ sn_lookup_number }} was not found in ServiceNow."
+    quiet: true
+
+# display_value=all returns {display_value, value} per field; flatten into
+# sn_record (raw values) and sn_record_display (display values).
+- name: Flatten record
+  ansible.builtin.set_fact:
+    sn_record: "{{ _sn_flat_raw }}"
+    sn_record_display: "{{ _sn_flat_disp }}"
+  vars:
+    _sn_flat_raw: >-
+      {%- set o = {} -%}
+      {%- for k, v in _sn_lookup.record[0].items() -%}
+      {%-   set _ = o.update({k: (v.value if v is mapping and 'value' in v else v)}) -%}
+      {%- endfor -%}
+      {{ o }}
+    _sn_flat_disp: >-
+      {%- set o = {} -%}
+      {%- for k, v in _sn_lookup.record[0].items() -%}
+      {%-   set _ = o.update({k: (v.display_value if v is mapping and 'display_value' in v else v)}) -%}
+      {%- endfor -%}
+      {{ o }}

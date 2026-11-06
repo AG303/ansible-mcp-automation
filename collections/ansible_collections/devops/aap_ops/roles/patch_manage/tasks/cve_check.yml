@@ -1,0 +1,96 @@
+---
+# package_name: package (Linux) or KB number / product name (Windows). fixed_version: minimum fixed version.
+- name: Package or CVE exposure check
+  block:
+    - name: Require package name
+      ansible.builtin.assert:
+        that: package_name | default('') | trim | length > 0
+        fail_msg: package_name is required.
+        quiet: true
+
+    - name: RHEL - installed version
+      when: aap_ops_os == 'rhel'
+      ansible.builtin.command: rpm -q --qf '%{EPOCH}:%{VERSION}-%{RELEASE}\n' {{ package_name | trim | quote }}
+      register: _cv_rpm
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: RHEL - compare with fixed version (rpm semantics)
+      when: aap_ops_os == 'rhel' and _cv_rpm.rc == 0 and fixed_version | default('') | length > 0
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_facts.python.executable | default('/usr/bin/python3') }}"
+          - -c
+          - |
+            import sys, rpm
+            def evr(s):
+                e, _, vr = s.rpartition(':') if ':' in s else ('0', '', s)
+                v, _, r = vr.partition('-')
+                return (None if e in ('', '(none)') else e, v, r or None)
+            inst = sys.argv[1].splitlines()[-1].replace('(none):', '')
+            print(rpm.labelCompare(evr(inst), evr(sys.argv[2])))
+          - "{{ _cv_rpm.stdout }}"
+          - "{{ fixed_version }}"
+      register: _cv_rpm_cmp
+      changed_when: false
+      check_mode: false
+
+    - name: Ubuntu - installed version and comparison
+      when: aap_ops_os == 'ubuntu'
+      ansible.builtin.shell: |
+        v=$(dpkg-query -W -f='${Version}' {{ package_name | trim | quote }} 2>/dev/null) || { echo "notinstalled|"; exit 0; }
+        if [ -n {{ fixed_version | default('') | quote }} ]; then
+          dpkg --compare-versions "$v" ge {{ fixed_version | default('') | quote }} && echo "$v|0" || echo "$v|-1"
+        else echo "$v|"; fi
+      args:
+        executable: /bin/bash
+      register: _cv_deb
+      changed_when: false
+      check_mode: false
+
+    - name: Windows - KB or product version
+      when: aap_ops_is_windows
+      ansible.windows.win_shell: |
+        $n = '{{ package_name | trim }}'; $fixed = '{{ fixed_version | default('') }}'
+        if ($n -match '^KB\d+$') {
+          $hf = Get-HotFix -Id $n -ErrorAction SilentlyContinue
+          @{ installed = [bool]$hf; version = if ($hf) { $n } else { '' }; cmp = if ($hf) { 0 } else { -1 } } | ConvertTo-Json -Compress
+        } else {
+          $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          $p = Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*$n*" } | Select-Object -First 1
+          $cmp = $null
+          if ($p -and $fixed) { try { $cmp = ([version]$p.DisplayVersion).CompareTo([version]$fixed) } catch { $cmp = $null } }
+          @{ installed = [bool]$p; version = "$($p.DisplayVersion)"; cmp = $cmp } | ConvertTo-Json -Compress
+        }
+      register: _cv_win
+      changed_when: false
+      check_mode: false
+
+    - name: Normalise
+      ansible.builtin.set_fact:
+        _cv: >-
+          {%- if aap_ops_os == 'rhel' -%}
+          {{ {'installed': _cv_rpm.rc == 0, 'version': _cv_rpm.stdout | trim if _cv_rpm.rc == 0 else '',
+              'cmp': (_cv_rpm_cmp.stdout | trim | int) if _cv_rpm_cmp.stdout is defined else none} }}
+          {%- elif aap_ops_os == 'ubuntu' -%}
+          {%-   set f = _cv_deb.stdout | trim | split('|') -%}
+          {{ {'installed': f[0] != 'notinstalled', 'version': f[0] if f[0] != 'notinstalled' else '', 'cmp': (f[1] | int) if f[1] | length > 0 else none} }}
+          {%- else -%}
+          {{ _cv_win.stdout | from_json }}
+          {%- endif -%}
+
+    - name: Record result
+      ansible.builtin.set_fact:
+        aap_ops_host_result:
+          status: "{{ 'fail' if (_cv.installed and _cv.cmp is number and _cv.cmp < 0) or (aap_ops_is_windows and package_name is match('^KB') and not _cv.installed) else 'ok' }}"
+          summary: >-
+            {%- if not _cv.installed and not (aap_ops_is_windows and package_name is match('^KB')) -%}{{ package_name }} not installed (not exposed)
+            {%- elif aap_ops_is_windows and package_name is match('^KB') -%}{{ package_name }} {{ 'installed' if _cv.installed else 'MISSING (exposed)' }}
+            {%- elif _cv.cmp is number -%}{{ package_name }} {{ _cv.version }} {{ 'EXPOSED - below fixed version ' ~ fixed_version if _cv.cmp < 0 else 'at or above fixed version ' ~ fixed_version }}
+            {%- else -%}{{ package_name }} {{ _cv.version }} installed (no fixed version given){%- endif -%}
+          details: "{{ _cv | combine({'package': package_name, 'fixed_version': fixed_version | default('')}) }}"
+  rescue:
+    - name: Convert failure to result
+      ansible.builtin.include_role: {name: devops.aap_ops.common, tasks_from: rescue}
+      vars: {aap_ops_check_name: CVE check}

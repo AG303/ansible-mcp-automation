@@ -1,0 +1,38 @@
+---
+# ansible-builder v3 definition for "AAP Ops EE".
+#   ansible-builder build -t registry.example.com/aap-ops/aap-ops-ee:1.0.0 -f execution-environment.yml
+# Base image: the AAP 2.6 supported minimal EE (RHEL 9). Pull requires registry.redhat.io login.
+version: 3
+
+images:
+  base_image:
+    name: registry.redhat.io/ansible-automation-platform-26/ee-minimal-rhel9:latest
+
+# ansible-core and ansible-runner come from the base image (AAP 2.6 default: ansible-core 2.16,
+# Python 3.12). The roles are tested on ansible-core 2.16 and 2.21.
+dependencies:
+  galaxy: requirements.yml
+  python:
+    - pywinrm>=0.4.3
+    - pypsrp>=0.8.1
+    - kubernetes>=24.2.0
+    - jmespath>=1.0.1
+    - netaddr>=0.10.1
+    - requests>=2.31.0
+  system:
+    - openssh-clients [platform:rpm]
+    - sshpass [platform:rpm]
+
+additional_build_files:
+  - src: ../collections/ansible_collections/devops/aap_ops
+    dest: configs/devops_aap_ops
+
+additional_build_steps:
+  append_final:
+    # Bake the devops.aap_ops collection into the EE so templates work even when the
+    # project does not ship collections/ (projects can still override with a newer copy).
+    - COPY _build/configs/devops_aap_ops /usr/share/ansible/collections/ansible_collections/devops/aap_ops
+    - RUN ansible-galaxy collection list devops.aap_ops
+
+options:
+  package_manager_path: /usr/bin/microdnf

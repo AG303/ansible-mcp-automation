@@ -1,0 +1,13 @@
+---
+- name: "Probe {{ _probe_table }}"
+  block:
+    - name: "Read one record from {{ _probe_table }}"
+      ansible.builtin.include_tasks: query.yml
+      vars: {sn_q_table: "{{ _probe_table }}", sn_q_query: "", sn_q_fields: [sys_id], sn_q_limit: 1}
+    - name: Record success
+      ansible.builtin.set_fact:
+        _sn_probes: "{{ _sn_probes | default([]) + [{'table': _probe_table, 'ok': true, 'total': sn_q_total, 'msg': ''}] }}"
+  rescue:
+    - name: Record failure
+      ansible.builtin.set_fact:
+        _sn_probes: "{{ _sn_probes | default([]) + [{'table': _probe_table, 'ok': false, 'total': 0, 'msg': ansible_failed_result.msg | default('error')}] }}"

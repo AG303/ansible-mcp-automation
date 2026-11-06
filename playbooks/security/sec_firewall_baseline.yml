@@ -1,0 +1,32 @@
+---
+# SEC - Host firewall baseline
+# Domain: Security Compliance. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# CHANGES SYSTEMS. Ensures the host firewall (firewalld, ufw or Windows Firewall) is enabled with an allow-list
+# of TCP ports. Use the WF workflow (approval required).
+# Survey variables: allowed_tcp_ports
+
+- name: SEC - Host firewall baseline
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: SEC - Host firewall baseline
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_hardening/firewall_baseline
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_hardening
+        tasks_from: firewall_baseline
+
+- name: Report - SEC - Host firewall baseline
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SEC - Host firewall baseline
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report

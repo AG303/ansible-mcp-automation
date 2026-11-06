@@ -1,0 +1,23 @@
+---
+# localhost: writes the diagnostics to the incident as a work note.
+- name: Compose work note
+  ansible.builtin.set_fact:
+    _diag_note: |-
+      AAP diagnostics (job {{ tower_job_id | default('local') }}) for {{ hostvars['localhost']._sn_targets | join(', ') }}:
+      {% for h in hostvars['localhost']._aap_ops_targets | default(hostvars['localhost']._sn_targets) %}
+      {%   set r = hostvars[h].aap_ops_host_result | default({'status': 'fail', 'summary': 'no result (unreachable or failed)', 'details': {}}) %}
+
+      == {{ h }}: {{ r.status | upper }}
+      {%   for k, v in (r.details | default({})).items() if v is mapping %}
+        {{ k }} [{{ v.status | default('?') }}] {{ v.summary | default('') }}
+      {%   else %}
+        {{ r.summary }}
+      {%   endfor %}
+      {% endfor %}
+
+- name: Add work note to incident
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: work_note}
+  vars:
+    sn_note_table: incident
+    sn_note_number: "{{ sn_incident_number }}"
+    sn_note_text: "{{ _diag_note }}"

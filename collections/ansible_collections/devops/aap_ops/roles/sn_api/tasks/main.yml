@@ -1,0 +1,10 @@
+---
+- name: Validate ServiceNow credential environment
+  ansible.builtin.assert:
+    that:
+      - sn_host | default('') | length > 0
+      - sn_username | default('') | length > 0
+    fail_msg: >-
+      SN_HOST/SN_USERNAME not set. Attach the "AAP Ops - ServiceNow" credential
+      (ServiceNow ITSM basic auth type) to this job template.
+    quiet: true

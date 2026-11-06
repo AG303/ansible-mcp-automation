@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  author: DevOps Automation
+  description: ServiceNow incident response for AAP 2.6 - create, de-duplicate, enrich from failed jobs, update/resolve, list, diagnose and remediate.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms: [{name: GenericLinux, versions: [all]}]
+dependencies: []

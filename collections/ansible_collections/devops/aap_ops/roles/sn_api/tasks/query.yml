@@ -1,0 +1,26 @@
+---
+# Bounded Table API query (servicenow.itsm.api_info always pages through the
+# whole result set; this keeps list/report queries cheap on large tables).
+# Inputs: sn_q_table, sn_q_query, sn_q_fields (list), sn_q_limit, sn_q_display (true|false|all)
+# Output: sn_q_records (list), sn_q_total (X-Total-Count header)
+- name: "Query {{ sn_q_table }}"
+  ansible.builtin.uri:
+    url: >-
+      {{ ((sn_host if sn_host.startswith('http') else 'https://' ~ sn_host) | regex_replace('/+$', '')) ~ '/api/now/table/' ~ sn_q_table ~ '?' ~
+         ({'sysparm_query': sn_q_query | default(''), 'sysparm_fields': sn_q_fields | default([]) | join(','),
+           'sysparm_limit': sn_q_limit | default(sn_query_limit), 'sysparm_display_value': sn_q_display | default('false'),
+           'sysparm_exclude_reference_link': 'true'} | urlencode) }}
+    method: GET
+    url_username: "{{ sn_username }}"
+    url_password: "{{ sn_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ sn_validate_certs | bool }}"
+    headers: {Accept: application/json}
+    status_code: 200
+    timeout: 60
+  register: _sn_q
+
+- name: Record query result
+  ansible.builtin.set_fact:
+    sn_q_records: "{{ _sn_q.json.result | default([]) }}"
+    sn_q_total: "{{ _sn_q.x_total_count | default(_sn_q.json.result | default([]) | length) | int }}"

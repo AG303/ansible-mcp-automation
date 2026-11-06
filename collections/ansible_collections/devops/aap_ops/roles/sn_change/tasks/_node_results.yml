@@ -1,0 +1,7 @@
+---
+# Sets _node_warn when any successful job node in the workflow published
+# aap_ops_result.overall warn/fail (findings that did not fail the job).
+- name: Inspect node artifacts
+  ansible.builtin.include_tasks: _node_result_one.yml
+  loop: "{{ aap_evidence.nodes | selectattr('type', 'equalto', 'job') | selectattr('status', 'equalto', 'successful') | list }}"
+  loop_control: {loop_var: _node, label: "{{ _node.name }}"}

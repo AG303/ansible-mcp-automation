@@ -1,0 +1,24 @@
+---
+# Output: sn_record / sn_record_display for the change, _chg_cis (CI names on the change),
+#         _chg_start / _chg_end (epoch, UTC)
+- name: Look up change
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: lookup}
+  vars: {sn_lookup_table: change_request, sn_lookup_number: "{{ sn_change_number }}"}
+
+- name: Affected CIs
+  ansible.builtin.include_role: {name: devops.aap_ops.sn_api, tasks_from: query}
+  vars:
+    sn_q_table: task_ci
+    sn_q_query: "task={{ sn_record.sys_id }}"
+    sn_q_fields: [ci_item]
+    sn_q_display: "true"
+    sn_q_limit: 1000
+
+- name: Record change facts
+  ansible.builtin.set_fact:
+    _chg: "{{ sn_record }}"
+    _chg_disp: "{{ sn_record_display }}"
+    _chg_cis: >-
+      {{ ([sn_record_display.cmdb_ci | default('')] + (sn_q_records | map(attribute='ci_item') | list)) | select | unique | list }}
+    _chg_start: "{{ (((sn_record.start_date | default('', true) or '1970-01-01 00:00:00') ~ ' +0000') | to_datetime('%Y-%m-%d %H:%M:%S %z')).timestamp() }}"
+    _chg_end: "{{ (((sn_record.end_date | default('', true) or '1970-01-01 00:00:00') ~ ' +0000') | to_datetime('%Y-%m-%d %H:%M:%S %z')).timestamp() }}"

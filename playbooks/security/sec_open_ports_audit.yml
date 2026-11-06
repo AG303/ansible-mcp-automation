@@ -1,0 +1,32 @@
+---
+# SEC - Listening ports audit
+# Domain: Security Compliance. Generated from catalog.yml by tools/gen_playbooks.py - edit the catalog/role, not this file.
+# Read-only. Listening TCP/UDP ports with owning process compared to an allow-list; flags anything unexpected.
+# Returns aap_ops_result.
+# Survey variables: allowed_ports
+
+- name: SEC - Listening ports audit
+  hosts: "{{ aap_ops_target | default('all') }}"
+  gather_facts: false
+  become: true
+  vars:
+    aap_ops_report_title: SEC - Listening ports audit
+  tasks:
+    - name: Bootstrap (facts, OS detection, target tracking)
+      ansible.builtin.include_role:
+        name: devops.aap_ops.common
+    - name: Run host_security_audit/open_ports_audit
+      ansible.builtin.include_role:
+        name: devops.aap_ops.host_security_audit
+        tasks_from: open_ports_audit
+
+- name: Report - SEC - Listening ports audit
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ops_report_title: SEC - Listening ports audit
+    aap_ops_report_hosts: "{{ hostvars['localhost']._aap_ops_targets | default([]) }}"
+  tasks:
+    - name: Publish aap_ops_result and reports
+      ansible.builtin.include_role:
+        name: devops.aap_ops.report
