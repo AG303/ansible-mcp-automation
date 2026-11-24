@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "aap-jobs": {
+      "type": "http",
+      "url": "${env:AAP_MCP_URL}/mcp/job_management",
+      "headers": {
+        "Authorization": "Bearer ${env:AAP_MCP_TOKEN}"
+      }
+    },
+    "aap-monitor": {
+      "type": "http",
+      "url": "${env:AAP_MCP_URL}/mcp/system_monitoring",
+      "headers": {
+        "Authorization": "Bearer ${env:AAP_MCP_TOKEN}"
+      }
+    },
+    "aap-inventory": {
+      "type": "http",
+      "url": "${env:AAP_MCP_URL}/mcp/inventory_management",
+      "headers": {
+        "Authorization": "Bearer ${env:AAP_MCP_TOKEN}"
+      }
+    }
+  }
+}

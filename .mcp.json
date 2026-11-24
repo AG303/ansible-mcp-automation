@@ -1,0 +1,70 @@
+{
+  "mcpServers": {
+    "aap-jobs": {
+      "type": "http",
+      "url": "${AAP_MCP_URL}/mcp/job_management",
+      "headers": {
+        "Authorization": "Bearer ${AAP_MCP_TOKEN}"
+      },
+      "tools": [
+        "job_templates_list",
+        "job_templates_retrieve",
+        "job_templates_launch_retrieve",
+        "workflow_job_templates_list",
+        "workflow_job_templates_retrieve",
+        "unified_job_templates_list",
+        "jobs_list",
+        "jobs_retrieve",
+        "jobs_stdout_retrieve",
+        "jobs_job_events_list",
+        "jobs_job_host_summaries_list",
+        "workflow_jobs_list",
+        "workflow_jobs_retrieve",
+        "workflow_jobs_workflow_nodes_list",
+        "schedules_list",
+        "schedules_retrieve",
+        "projects_list",
+        "activation_instances_list",
+        "activation_instances_logs_list",
+        "job_templates_launch_create",
+        "workflow_job_templates_launch_create"
+      ]
+    },
+    "aap-monitor": {
+      "type": "http",
+      "url": "${AAP_MCP_URL}/mcp/system_monitoring",
+      "headers": {
+        "Authorization": "Bearer ${AAP_MCP_TOKEN}"
+      },
+      "tools": [
+        "status_retrieve",
+        "feature_flags_state_retrieve",
+        "instance_groups_list",
+        "instance_groups_retrieve",
+        "instances_retrieve",
+        "mesh_visualizer_retrieve",
+        "activity_stream_list",
+        "activity_stream_retrieve",
+        "activitystream_list",
+        "activitystream_retrieve"
+      ]
+    },
+    "aap-inventory": {
+      "type": "http",
+      "url": "${AAP_MCP_URL}/mcp/inventory_management",
+      "headers": {
+        "Authorization": "Bearer ${AAP_MCP_TOKEN}"
+      },
+      "tools": [
+        "inventories_list",
+        "inventory_sources_list",
+        "inventories_inventory_sources_list",
+        "groups_list",
+        "hosts_list",
+        "hosts_retrieve",
+        "hosts_variable_data_retrieve",
+        "hosts_ansible_facts_retrieve"
+      ]
+    }
+  }
+}

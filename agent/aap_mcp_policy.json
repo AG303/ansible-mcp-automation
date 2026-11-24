@@ -1,0 +1,1060 @@
+{
+  "_generated": "tools/gen_agent_config.py from catalog.yml - do not edit by hand",
+  "version": 1,
+  "servers": {
+    "aap-jobs": {
+      "toolset": "job_management"
+    },
+    "aap-monitor": {
+      "toolset": "system_monitoring"
+    },
+    "aap-inventory": {
+      "toolset": "inventory_management"
+    }
+  },
+  "read_tools": {
+    "aap-jobs": [
+      "job_templates_list",
+      "job_templates_retrieve",
+      "job_templates_launch_retrieve",
+      "workflow_job_templates_list",
+      "workflow_job_templates_retrieve",
+      "unified_job_templates_list",
+      "jobs_list",
+      "jobs_retrieve",
+      "jobs_stdout_retrieve",
+      "jobs_job_events_list",
+      "jobs_job_host_summaries_list",
+      "workflow_jobs_list",
+      "workflow_jobs_retrieve",
+      "workflow_jobs_workflow_nodes_list",
+      "schedules_list",
+      "schedules_retrieve",
+      "projects_list",
+      "activation_instances_list",
+      "activation_instances_logs_list"
+    ],
+    "aap-monitor": [
+      "status_retrieve",
+      "feature_flags_state_retrieve",
+      "instance_groups_list",
+      "instance_groups_retrieve",
+      "instances_retrieve",
+      "mesh_visualizer_retrieve",
+      "activity_stream_list",
+      "activity_stream_retrieve",
+      "activitystream_list",
+      "activitystream_retrieve"
+    ],
+    "aap-inventory": [
+      "inventories_list",
+      "inventory_sources_list",
+      "inventories_inventory_sources_list",
+      "groups_list",
+      "hosts_list",
+      "hosts_retrieve",
+      "hosts_variable_data_retrieve",
+      "hosts_ansible_facts_retrieve"
+    ]
+  },
+  "launch_tools": {
+    "aap-jobs": [
+      "job_templates_launch_create",
+      "workflow_job_templates_launch_create"
+    ]
+  },
+  "deny_reasons": {
+    "call_tool": "The AAP discover endpoint is not allowed: call_tool bypasses the per-tool allowlist. Connect the per-toolset endpoints in .mcp.json / .cursor/mcp.json instead.",
+    "discover": "The AAP discover endpoint is not allowed. Use the aap-jobs, aap-monitor and aap-inventory servers.",
+    "jobs_cancel_create": "Cancelling jobs goes through approval. Launch 'WF - JOB - Cancel stuck jobs'.",
+    "workflow_jobs_cancel_create": "Cancelling workflows goes through approval. Launch 'WF - JOB - Cancel stuck jobs', or ask an AAP Ops Approver to deny the pending approval.",
+    "jobs_relaunch_create": "Relaunching goes through approval. Launch 'WF - JOB - Relaunch failed job'.",
+    "workflow_jobs_relaunch_create": "Relaunching goes through approval. Launch the WF workflow again with a valid change.",
+    "schedules_create": "Schedules are managed as config-as-code. Use 'WF - JOB - Enable or disable schedules'.",
+    "schedules_update": "Schedules are managed as config-as-code. Use 'WF - JOB - Enable or disable schedules'.",
+    "schedules_destroy": "Schedules are managed as config-as-code. Use 'WF - JOB - Enable or disable schedules'.",
+    "job_templates_create": "Job templates are managed as config-as-code (catalog.yml + 'WF - PLAT - Apply config-as-code').",
+    "job_templates_survey_spec_create": "Surveys are managed as config-as-code (catalog.yml).",
+    "projects_create": "Projects are managed as config-as-code.",
+    "ad_hoc_commands_create": "Ad hoc commands are not allowed for agents. Use a catalog job template.",
+    "hosts_ad_hoc_commands_create": "Ad hoc commands are not allowed for agents. Use a catalog job template.",
+    "inventories_ad_hoc_commands_create": "Ad hoc commands are not allowed for agents. Use a catalog job template.",
+    "groups_ad_hoc_commands_create": "Ad hoc commands are not allowed for agents. Use a catalog job template.",
+    "ad_hoc_commands_relaunch_create": "Ad hoc commands are not allowed for agents.",
+    "hosts_create": "Inventory changes are not allowed for agents.",
+    "groups_create": "Inventory changes are not allowed for agents.",
+    "inventories_create": "Inventory changes are not allowed for agents.",
+    "inventory_sources_create": "Inventory changes are not allowed for agents.",
+    "inventory_sources_update_create": "Inventory source syncs are not allowed for agents.",
+    "instances_create": "Instance changes are not allowed for agents.",
+    "instance_groups_create": "Instance group changes are not allowed for agents."
+  },
+  "launch_body_keys": [
+    "limit",
+    "extra_vars"
+  ],
+  "broad_limits": [
+    "all",
+    "*",
+    "*:*",
+    "&all",
+    "!none"
+  ],
+  "change_number_regex": "^CHG[0-9]{7,}$",
+  "shell": {
+    "matcher": "AAP_|CONTROLLER_|/api/|/mcp/|awx|configure_aap",
+    "token_regex": "\\b(AAP_MCP_TOKEN|AAP_TOKEN|CONTROLLER_OAUTH_TOKEN|CONTROLLER_PASSWORD)\\b",
+    "client_regex": "(^|[\\s;&|(])(curl|wget|http|https|xh|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)(\\s|$)|requests\\.|urllib|httpx",
+    "aap_path_regex": "/api/(controller|gateway|eda|galaxy)/|/api/v2/|/mcp/[a-z_]+",
+    "cli_regex": "(^|[\\s;&|(])awx(\\s|$)|configure_aap\\.yml"
+  },
+  "agent_team": "MCP Agents",
+  "approver_team": "AAP Ops Approvers",
+  "id_map_file": ".aap-mcp/template_ids.json",
+  "id_map_max_age_days": 7,
+  "audit_log": ".aap-mcp/audit.jsonl",
+  "job_templates": {
+    "MON - Host health check": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "cpu_warn_pct",
+        "mem_warn_pct",
+        "disk_warn_pct"
+      ],
+      "required_vars": []
+    },
+    "MON - Disk usage and largest directories": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "disk_warn_pct",
+        "disk_fail_pct",
+        "scan_path"
+      ],
+      "required_vars": []
+    },
+    "MON - Service status check": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "service_names"
+      ],
+      "required_vars": [
+        "service_names"
+      ]
+    },
+    "MON - Port and endpoint reachability": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "endpoints",
+        "timeout_sec"
+      ],
+      "required_vars": []
+    },
+    "MON - Recent log errors": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "hours",
+        "max_entries",
+        "match_pattern"
+      ],
+      "required_vars": []
+    },
+    "MON - Top processes": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "top_n"
+      ],
+      "required_vars": []
+    },
+    "MON - TLS certificate expiry": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "cert_paths",
+        "tls_endpoints",
+        "warn_days"
+      ],
+      "required_vars": []
+    },
+    "MON - Time synchronization status": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "max_offset_ms"
+      ],
+      "required_vars": []
+    },
+    "MON - Network diagnostics": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "dns_names"
+      ],
+      "required_vars": []
+    },
+    "MON - System inventory report": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "MON - Fleet health summary": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "disk_warn_pct"
+      ],
+      "required_vars": []
+    },
+    "JOB - Failed jobs summary": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "hours",
+        "template_filter"
+      ],
+      "required_vars": []
+    },
+    "JOB - Long-running jobs": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "max_minutes"
+      ],
+      "required_vars": []
+    },
+    "JOB - Schedule audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "name_filter"
+      ],
+      "required_vars": []
+    },
+    "JOB - Job template hygiene audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "stale_days",
+        "failure_rate_pct"
+      ],
+      "required_vars": []
+    },
+    "JOB - Queue and capacity status": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "JOB - Host failure trend": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "days",
+        "top_n"
+      ],
+      "required_vars": []
+    },
+    "JOB - Pending workflow approvals": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "SEC - Compliance scan (CIS or STIG)": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "compliance_profile",
+        "min_score_pct"
+      ],
+      "required_vars": []
+    },
+    "SEC - Local account audit": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "stale_days"
+      ],
+      "required_vars": []
+    },
+    "SEC - SELinux, AppArmor and Defender status": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "SEC - File permission audit": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "scan_paths"
+      ],
+      "required_vars": []
+    },
+    "SEC - Listening ports audit": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "allowed_ports"
+      ],
+      "required_vars": []
+    },
+    "SEC - AAP credential audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "stale_days"
+      ],
+      "required_vars": []
+    },
+    "SEC - AAP users and RBAC audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "stale_days"
+      ],
+      "required_vars": []
+    },
+    "SEC - AAP activity stream audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "hours"
+      ],
+      "required_vars": []
+    },
+    "SEC - AAP token audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "max_age_days"
+      ],
+      "required_vars": []
+    },
+    "PLAT - AAP platform health": {
+      "kind": "read-only",
+      "target": "openshift",
+      "requires_limit": false,
+      "survey_vars": [
+        "aap_namespace",
+        "aap_cr_name"
+      ],
+      "required_vars": [
+        "aap_namespace",
+        "aap_cr_name"
+      ]
+    },
+    "PLAT - MCP server status": {
+      "kind": "read-only",
+      "target": "openshift",
+      "requires_limit": false,
+      "survey_vars": [
+        "aap_namespace",
+        "aap_cr_name"
+      ],
+      "required_vars": [
+        "aap_namespace",
+        "aap_cr_name"
+      ]
+    },
+    "PLAT - Operator version and upgrade status": {
+      "kind": "read-only",
+      "target": "openshift",
+      "requires_limit": false,
+      "survey_vars": [
+        "aap_namespace"
+      ],
+      "required_vars": [
+        "aap_namespace"
+      ]
+    },
+    "PLAT - Backup audit": {
+      "kind": "read-only",
+      "target": "openshift",
+      "requires_limit": false,
+      "survey_vars": [
+        "aap_namespace",
+        "max_age_days"
+      ],
+      "required_vars": [
+        "aap_namespace"
+      ]
+    },
+    "PLAT - Instance and container group audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "PLAT - Execution environment audit": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "PLAT - Export configuration snapshot": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "PLAT - Configuration drift check": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "PLAT - Subscription and host usage": {
+      "kind": "read-only",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "PATCH - Available updates": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "security_only"
+      ],
+      "required_vars": []
+    },
+    "PATCH - Pre-patch readiness": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "min_free_mb",
+        "critical_services"
+      ],
+      "required_vars": []
+    },
+    "PATCH - Post-patch validation": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "critical_services"
+      ],
+      "required_vars": []
+    },
+    "PATCH - Reboot required check": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "PATCH - Package or CVE exposure check": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "package_name",
+        "fixed_version"
+      ],
+      "required_vars": [
+        "package_name"
+      ]
+    },
+    "PATCH - Patch compliance report": {
+      "kind": "read-only",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "max_days_since_patch"
+      ],
+      "required_vars": []
+    },
+    "SN - ServiceNow connection test": {
+      "kind": "read-only",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [],
+      "required_vars": []
+    },
+    "SN - Create incident": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_short_description",
+        "sn_description",
+        "sn_impact",
+        "sn_urgency",
+        "sn_assignment_group",
+        "sn_cmdb_ci",
+        "sn_correlation_id"
+      ],
+      "required_vars": [
+        "sn_short_description"
+      ]
+    },
+    "SN - Incident from failed job": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_source_job_id",
+        "sn_impact",
+        "sn_urgency"
+      ],
+      "required_vars": []
+    },
+    "SN - Update or resolve incident": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_incident_number",
+        "sn_incident_state",
+        "sn_work_note",
+        "sn_close_code",
+        "sn_close_notes"
+      ],
+      "required_vars": [
+        "sn_incident_number"
+      ]
+    },
+    "SN - Open incidents report": {
+      "kind": "read-only",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_assignment_group",
+        "sn_max_priority",
+        "sn_aap_only"
+      ],
+      "required_vars": []
+    },
+    "SN - Incident diagnostics": {
+      "kind": "servicenow-write",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_incident_number",
+        "service_names",
+        "hours"
+      ],
+      "required_vars": [
+        "sn_incident_number"
+      ]
+    },
+    "SN - Create change request": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_type",
+        "sn_template_name",
+        "sn_short_description",
+        "sn_planned_start",
+        "sn_planned_end",
+        "sn_affected_hosts",
+        "sn_assignment_group",
+        "sn_risk"
+      ],
+      "required_vars": [
+        "sn_template_name",
+        "sn_short_description",
+        "sn_planned_start",
+        "sn_planned_end"
+      ]
+    },
+    "SN - Change gate": {
+      "kind": "read-only",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "SN - Upcoming and active changes": {
+      "kind": "read-only",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "days",
+        "sn_assignment_group"
+      ],
+      "required_vars": []
+    },
+    "SN - Change conflict check": {
+      "kind": "read-only",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_planned_start",
+        "sn_planned_end",
+        "sn_affected_hosts"
+      ],
+      "required_vars": [
+        "sn_planned_start",
+        "sn_planned_end"
+      ]
+    },
+    "SN - Create problem": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_short_description",
+        "sn_description",
+        "sn_incident_numbers",
+        "sn_impact",
+        "sn_urgency"
+      ],
+      "required_vars": [
+        "sn_short_description"
+      ]
+    },
+    "SN - Problem candidates from incident trend": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "days",
+        "min_incidents",
+        "create_problems"
+      ],
+      "required_vars": []
+    },
+    "SN - Problem root cause evidence": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_problem_number",
+        "days"
+      ],
+      "required_vars": [
+        "sn_problem_number"
+      ]
+    },
+    "SN - Update or resolve problem": {
+      "kind": "servicenow-write",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_problem_number",
+        "sn_problem_state",
+        "sn_cause_notes",
+        "sn_fix_notes",
+        "sn_resolution_code"
+      ],
+      "required_vars": [
+        "sn_problem_number"
+      ]
+    },
+    "SN - Open problems report": {
+      "kind": "read-only",
+      "target": "servicenow",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_assignment_group"
+      ],
+      "required_vars": []
+    },
+    "SN - CMDB server CI sync": {
+      "kind": "servicenow-write",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_dry_run"
+      ],
+      "required_vars": []
+    }
+  },
+  "workflows": {
+    "WF - MON - Restart service with validation": {
+      "template": "MON - Restart service with validation",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "service_name",
+        "verify_port"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "service_name"
+      ]
+    },
+    "WF - MON - Disk cleanup": {
+      "template": "MON - Disk cleanup",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "older_than_days",
+        "journal_max_size"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - JOB - Cancel stuck jobs": {
+      "template": "JOB - Cancel stuck jobs",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "max_minutes",
+        "template_filter",
+        "include_pending"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - JOB - Relaunch failed job": {
+      "template": "JOB - Relaunch failed job",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "job_id",
+        "failed_hosts_only"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "job_id"
+      ]
+    },
+    "WF - JOB - Enable or disable schedules": {
+      "template": "JOB - Enable or disable schedules",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "name_filter",
+        "desired_state"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "name_filter"
+      ]
+    },
+    "WF - JOB - Launch template in batches": {
+      "template": "JOB - Launch template in batches",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "launch_template_name",
+        "launch_limit",
+        "batch_size"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "launch_template_name",
+        "launch_limit"
+      ]
+    },
+    "WF - JOB - Run job history cleanup": {
+      "template": "JOB - Run job history cleanup",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "keep_days"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - SEC - Compliance remediation (CIS or STIG)": {
+      "template": "SEC - Compliance remediation (CIS or STIG)",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "compliance_profile",
+        "control_ids"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - SEC - SSH hardening": {
+      "template": "SEC - SSH hardening",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "permit_root_login",
+        "allow_groups"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - SEC - Password and lockout policy": {
+      "template": "SEC - Password and lockout policy",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "min_length",
+        "max_age_days",
+        "lockout_attempts"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - SEC - Host firewall baseline": {
+      "template": "SEC - Host firewall baseline",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "allowed_tcp_ports"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "allowed_tcp_ports"
+      ]
+    },
+    "WF - SEC - Audit logging configuration": {
+      "template": "SEC - Audit logging configuration",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "compliance_profile"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - PLAT - Enable or disable MCP server": {
+      "template": "PLAT - Enable or disable MCP server",
+      "target": "openshift",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "aap_namespace",
+        "aap_cr_name",
+        "mcp_enabled"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "aap_namespace",
+        "aap_cr_name"
+      ]
+    },
+    "WF - PLAT - Platform backup": {
+      "template": "PLAT - Platform backup",
+      "target": "openshift",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "aap_namespace",
+        "aap_cr_name",
+        "backup_pvc_size"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "aap_namespace",
+        "aap_cr_name"
+      ]
+    },
+    "WF - PLAT - Register execution environment": {
+      "template": "PLAT - Register execution environment",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number",
+        "ee_name",
+        "ee_image",
+        "ee_pull",
+        "ee_organization"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "ee_name",
+        "ee_image"
+      ]
+    },
+    "WF - PLAT - Apply config-as-code": {
+      "template": "PLAT - Apply config-as-code",
+      "target": "aap_api",
+      "requires_limit": false,
+      "survey_vars": [
+        "sn_change_number"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - PATCH - Apply updates": {
+      "template": "PATCH - Apply updates",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "security_only",
+        "exclude_packages",
+        "reboot_policy",
+        "serial_pct",
+        "min_free_mb",
+        "critical_services"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - PATCH - Controlled reboot": {
+      "template": "PATCH - Controlled reboot",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "only_if_required",
+        "serial_pct",
+        "critical_services",
+        "min_free_mb"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - PATCH - Install, update or remove a package": {
+      "template": "PATCH - Install, update or remove a package",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "package_names",
+        "package_state"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "package_names"
+      ]
+    },
+    "WF - PATCH - Configure update source": {
+      "template": "PATCH - Configure update source",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "patch_source"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - PATCH - Old kernel cleanup": {
+      "template": "PATCH - Old kernel cleanup",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "keep_kernels"
+      ],
+      "required_vars": [
+        "sn_change_number"
+      ]
+    },
+    "WF - PATCH - Hold or release package versions": {
+      "template": "PATCH - Hold or release package versions",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "package_names",
+        "hold_action"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "package_names"
+      ]
+    },
+    "WF - SN - Incident remediation": {
+      "template": "SN - Incident remediation",
+      "target": "hosts",
+      "requires_limit": true,
+      "survey_vars": [
+        "sn_change_number",
+        "sn_incident_number",
+        "remediation_action",
+        "service_name",
+        "resolve_on_success"
+      ],
+      "required_vars": [
+        "sn_change_number",
+        "sn_incident_number"
+      ]
+    }
+  },
+  "blocked_templates": [
+    "JOB - Cancel stuck jobs",
+    "JOB - Enable or disable schedules",
+    "JOB - Launch template in batches",
+    "JOB - Relaunch failed job",
+    "JOB - Run job history cleanup",
+    "MON - Disk cleanup",
+    "MON - Restart service with validation",
+    "PATCH - Apply updates",
+    "PATCH - Configure update source",
+    "PATCH - Controlled reboot",
+    "PATCH - Hold or release package versions",
+    "PATCH - Install, update or remove a package",
+    "PATCH - Old kernel cleanup",
+    "PLAT - Apply config-as-code",
+    "PLAT - Enable or disable MCP server",
+    "PLAT - Platform backup",
+    "PLAT - Register execution environment",
+    "SEC - Audit logging configuration",
+    "SEC - Compliance remediation (CIS or STIG)",
+    "SEC - Host firewall baseline",
+    "SEC - Password and lockout policy",
+    "SEC - SSH hardening",
+    "SN - Change close",
+    "SN - Change start",
+    "SN - Incident remediation"
+  ]
+}

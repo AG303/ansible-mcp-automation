@@ -82,3 +82,30 @@ Every changing host template supports check mode (`job_type: check` or `-C`). Re
 `WF - PLAT - Enable or disable MCP server` patches `spec.mcp.disabled` on the `AnsibleAutomationPlatform` CR
 ([Red Hat](https://docs.redhat.com/it/documentation/red_hat_ansible_automation_platform/2.6/install-enable_the_mcp_server_on_an_existing_deployment)).
 It's the kill switch for all agent access, and it goes through the same change gate and approval.
+
+## 7. Editor agent gate
+
+When the agent runs in VS Code (GitHub Copilot) or Cursor, a hook checks every AAP MCP call before it leaves the
+editor ([EDITOR_AGENTS.md](EDITOR_AGENTS.md)). `tools/aap_mcp_gate.py` reads `agent/aap_mcp_policy.json`, which is
+generated from `catalog.yml`:
+
+- Read tools run. Read-only catalog templates launch without a prompt, but only with a narrow `limit` on host
+  templates and only survey variables in `extra_vars`. Other launch fields are denied.
+- ServiceNow-write templates and every `WF -` workflow need confirmation in the editor. A workflow also needs a
+  `sn_change_number` that looks like `CHG` plus digits. After that, the ServiceNow gate and the `AAP Ops Approvers`
+  approval in section 2 still apply.
+- Bare changing templates, unknown IDs, cancel/relaunch, object create/update/delete, ad hoc commands, and every tool
+  outside the allowlist are denied.
+- The `/mcp/discover` endpoint is denied. Its `call_tool` tool can reach any tool the token can, which would bypass
+  the per-tool allowlist. Connect the per-toolset endpoints only.
+- Shell commands that use AAP token variables, call the AAP API or MCP URLs directly, run `awx`, or apply
+  `configure_aap.yml` are denied.
+- Errors fail closed, and every decision goes to `.aap-mcp/audit.jsonl`.
+
+`tools/aap_mcp_sync.py` checks the token before the gate allows any launch. It fails if the agent user is a
+superuser or an approver, if the token can start a changing or workflow-only job template, or if a workflow has no
+approval node. Only after that does it write the template ID map that the gate uses.
+
+The gate runs on the user's workstation, so it doesn't replace sections 1 and 2. Someone with the token can always
+call AAP without the editor. RBAC, the change gate and the approval node are the hard boundary; the editor gate adds
+an earlier human check and gives the agent clear errors.

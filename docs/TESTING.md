@@ -6,6 +6,8 @@
 python3 tools/gen_playbooks.py --check      # playbooks match catalog.yml
 python3 tools/gen_config.py --check         # aap_config/vars, CATALOG.md, EE requirements match
 python3 tests/validate_config.py            # referential integrity and guardrail rules
+python3 tools/gen_agent_config.py --check   # editor MCP configs and gate policy match catalog.yml
+python3 tests/test_agent_gate.py            # editor approval gate and token preflight (stdlib only)
 for p in playbooks/*/*.yml; do ansible-playbook --syntax-check "$p"; done
 ansible-lint                                # production profile, 0 failures expected
 yamllint -c .yamllint .
@@ -52,6 +54,21 @@ against localhost. The ServiceNow mock supports encoded queries (`=`, `!=`, `IN`
 summary and on the absence of rescued errors. To check record state transitions and work notes, query the mock
 afterwards (for example `curl -u x:y 'http://127.0.0.1:8098/api/now/table/change_request?sysparm_query=number=CHG0001001'`).
 For this release, those were checked by hand.
+
+### Editor agent gate: `tests/test_agent_gate.py`
+
+Runs `tools/aap_mcp_gate.py` the way the editors do, with the hook payload on stdin, for Cursor
+(`beforeMCPExecution`, `beforeShellExecution`) and VS Code / Copilot (`preToolUse` and `PreToolUse`). It covers
+every allowlisted read tool, launch checks (limit, survey variables, overrides, unknown and blocked IDs), workflow
+change numbers, the discover endpoint, tool-name prefixes, shell rules, passthrough for other servers, a stale or
+missing ID map, fail-closed on bad input or missing policy, and the audit log. It also runs `tools/aap_mcp_sync.py`
+against `tests/mock_aap_mcp.py` (gateway, controller and MCP JSON-RPC with JSON and SSE responses) in each scenario:
+healthy, superuser token, approver token, changing template launchable, workflow without approval node, write
+operations off, and a bad token. 27 tests pass on Python 3.14, and on 3.9 and 3.12 (the generator check skips without PyYAML). The gate and the sync script use only the standard library.
+
+Not yet run inside the editors against a live AAP 2.6 MCP server. Check the tool names VS Code sends in `toolName`
+for MCP tools on your version (the gate accepts the common prefixed forms) and look at `.aap-mcp/audit.jsonl`
+after the verification prompts in [EDITOR_AGENTS.md](EDITOR_AGENTS.md).
 
 ## Results for this release (2026-11-05)
 

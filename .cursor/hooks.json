@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeMCPExecution": [
+      {
+        "command": "python3 tools/aap_mcp_gate.py --client cursor-mcp",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "python3 tools/aap_mcp_gate.py --client cursor-shell",
+        "timeout": 10,
+        "failClosed": true,
+        "matcher": "AAP_|CONTROLLER_|/api/|/mcp/|awx|configure_aap"
+      }
+    ]
+  }
+}
