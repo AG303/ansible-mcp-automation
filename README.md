@@ -57,6 +57,12 @@ execution-environment/          ansible-builder v3 definition (AAP 2.6 ee-minima
 inventory/                      example inventory and group_vars (Windows WinRM, patch sources)
 tools/gen_playbooks.py          catalog -> playbooks   (--check detects drift)
 tools/gen_config.py             catalog -> aap_config/vars, docs/CATALOG.md, EE requirements
+tools/gen_agent_config.py       catalog -> agent/aap_mcp_policy.json, .mcp.json, .cursor/mcp.json
+tools/aap_mcp_gate.py           approval-gate hook for VS Code and Cursor agents
+tools/aap_mcp_sync.py           agent-token preflight and template ID map for the gate
+agent/                          generated gate policy
+.mcp.json, .github/hooks, .github/agents, .vscode   VS Code (GitHub Copilot) MCP servers, hook, custom agent
+.cursor/                        Cursor MCP servers, hooks, rule
 tests/                          AAP and ServiceNow mock APIs, test runners, config validator
 docs/                           guides (below)
 ```
@@ -81,7 +87,9 @@ docs/                           guides (below)
 5. Add the managed hosts to the `AAP Ops - Managed Hosts` inventory, or attach your own dynamic source.
 6. Create an AAP user for the agent, add it to the `MCP Agents` team, and issue it a token. Give that token to the MCP client.
    Put the humans who approve changes in `AAP Ops Approvers`.
-7. Test it. Run `SN - ServiceNow connection test` and `MON - Host health check` with a small limit, then ask the agent
+7. To use the agent from VS Code or Cursor, export `AAP_URL`, `AAP_MCP_URL` and `AAP_MCP_TOKEN`, run
+   `python3 tools/aap_mcp_sync.py`, and open this folder. See [docs/EDITOR_AGENTS.md](docs/EDITOR_AGENTS.md).
+8. Test it. Run `SN - ServiceNow connection test` and `MON - Host health check` with a small limit, then ask the agent
    "check disk usage on web servers" and watch it find and launch `MON - Disk usage and largest directories`.
 
 ## Documentation
@@ -89,6 +97,7 @@ docs/                           guides (below)
 - [docs/CATALOG.md](docs/CATALOG.md): every template, its kind, entry point, target and survey
 - [docs/MCP_AGENT_GUIDE.md](docs/MCP_AGENT_GUIDE.md): how an agent should discover, launch and read results (you can paste it into a system prompt)
 - [docs/GUARDRAILS.md](docs/GUARDRAILS.md): approval workflows, RBAC, check mode, and blast-radius controls
+- [docs/EDITOR_AGENTS.md](docs/EDITOR_AGENTS.md): connecting VS Code and Cursor agents to the MCP server with approval gates
 - [docs/SERVICENOW_INTEGRATION.md](docs/SERVICENOW_INTEGRATION.md): incident response, change control and problem management flows
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md): how to add a template, role contract, and result schema
 - [docs/TESTING.md](docs/TESTING.md): mocks, test runners and what has (and has not) been tested

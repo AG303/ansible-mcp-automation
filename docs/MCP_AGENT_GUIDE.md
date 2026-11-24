@@ -15,6 +15,11 @@ How an AI agent connected to the AAP 2.6 MCP server should use this content. You
   ([MCP configuration reference](https://docs.redhat.com/es/documentation/red_hat_ansible_automation_platform/2.6/extend-standalone_mcp_server_configuration_reference)).
   Optionally add `system_monitoring` for instance and status data. RBAC means the agent's token can only execute
   what the `MCP Agents` team was granted (see [GUARDRAILS.md](GUARDRAILS.md)).
+- Connect each toolset at its own URL (`https://<host>:8448/mcp/job_management`, and so on). Don't connect
+  `/mcp/discover`: its `call_tool` tool reaches every tool the token can use, so a client-side tool allowlist or
+  per-tool approval can't see what actually runs.
+- For VS Code (GitHub Copilot) and Cursor, this repo ships ready-made MCP configs, an approval-gate hook and the agent
+  instructions below. See [EDITOR_AGENTS.md](EDITOR_AGENTS.md).
 
 ## Naming contract
 
